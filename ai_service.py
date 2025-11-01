@@ -786,16 +786,20 @@ class AIService:
         jst = pytz.timezone('Asia/Tokyo')
         if not free_slots_by_date:
             return "✅空き時間はありませんでした。"
+        
+        # 空き時間がない日を除外
+        dates_with_slots = {date: slots for date, slots in free_slots_by_date.items() if len(slots) > 0}
+        
+        if not dates_with_slots:
+            return "✅空き時間はありませんでした。"
+        
         response = "✅以下が空き時間です！\n\n"
-        for date, slots in free_slots_by_date.items():
+        for date, slots in dates_with_slots.items():
             dt = jst.localize(datetime.strptime(date, "%Y-%m-%d"))
             weekday = "月火水木金土日"[dt.weekday()]
             response += f"{dt.month}/{dt.day}（{weekday}）\n"
-            if not slots:
-                response += "・空き時間なし\n"
-            else:
-                for slot in slots:
-                    response += f"・{slot['start']}〜{slot['end']}\n"
+            for slot in slots:
+                response += f"・{slot['start']}〜{slot['end']}\n"
         return response
     
     def format_free_slots_response_by_frame(self, free_slots_by_frame):
@@ -830,20 +834,24 @@ class AIService:
                 
         print(f"[DEBUG] 日付ごとの空き時間: {date_slots}")
         
+        # 空き時間がない日を除外
+        dates_with_slots = {date: slots for date, slots in date_slots.items() if len(slots) > 0}
+        
+        if not dates_with_slots:
+            print(f"[DEBUG] 空き時間がある日が存在しない")
+            return "✅空き時間はありませんでした。"
+        
         response = "✅以下が空き時間です！\n\n"
-        for date in sorted(date_slots.keys()):
+        for date in sorted(dates_with_slots.keys()):
             dt = jst.localize(datetime.strptime(date, "%Y-%m-%d"))
             weekday = "月火水木金土日"[dt.weekday()]
             response += f"{dt.month}/{dt.day}（{weekday}）\n"
             
-            slots = sorted(list(date_slots[date]))
+            slots = sorted(list(dates_with_slots[date]))
             print(f"[DEBUG] 日付{date}の最終空き時間: {slots}")
             
-            if not slots:
-                response += "・空き時間なし\n"
-            else:
-                for start, end in slots:
-                    response += f"・{start}〜{end}\n"
+            for start, end in slots:
+                response += f"・{start}〜{end}\n"
                     
         print(f"[DEBUG] 最終レスポンス: {response}")
         return response 
