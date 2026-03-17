@@ -288,28 +288,94 @@ class LineBotHandler:
                 # 予定追加時の重複確認ロジック（複数予定対応）
                 if not self.calendar_service:
                     return TextSendMessage(text="カレンダーサービスが初期化されていません。")
-                
+
                 dates = ai_result.get('dates', [])
+                travel_time_hours = ai_result.get('travel_time_hours')
                 if not dates:
                     return TextSendMessage(text="イベント情報を正しく認識できませんでした。\n\n例: 「明日の午前9時から会議を追加して」\n「来週月曜日の14時から打ち合わせ」")
-                
+
                 # 複数の予定を処理
-                return self._handle_multiple_events(dates, line_user_id)
+                return self._handle_multiple_events(dates, line_user_id, travel_time_hours)
             else:
                 # 未対応コマンドの場合もガイダンスメッセージ
                 return TextSendMessage(text="日時の送信で空き時間が分かります！\n日時と内容の送信で予定を追加します！\n\n例：\n・「明日の空き時間」\n・「7/15 15:00〜16:00の空き時間」\n・「明日の午前9時から会議を追加して」\n・「来週月曜日の14時から打ち合わせ」")
         except Exception as e:
             return TextSendMessage(text=f"エラーが発生しました: {str(e)}")
     
-    def _handle_multiple_events(self, dates, line_user_id):
+    def _handle_multiple_events(self, dates, line_user_id, travel_time_hours=None):
         """複数の予定を処理します"""
         try:
             from dateutil import parser
             import json
-            
+
             added_events = []
             failed_events = []
-            
+
+            # 移動時間を含む予定を展開
+            expanded_dates = []
+            global_travel_time_hours = travel_time_hours
+
+            for date_info in dates:
+                # 個別の移動時間が指定されている場合はそれを優先、なければ全体の設定を使用
+                item_travel_time_hours = date_info.get('travel_time_hours', global_travel_time_hours)
+                if item_travel_time_hours:
+                    # メイン予定の日時を取得
+                    date_str = date_info.get('date')
+                    time_str = date_info.get('time')
+                    end_time_str = date_info.get('end_time')
+                    title = date_info.get('title', '予定')
+
+                    if date_str and time_str and end_time_str:
+                        from datetime import datetime, timedelta
+
+                        # メイン予定の開始・終了時刻を計算
+                        main_start = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+                        main_end = datetime.strptime(f"{date_str} {end_time_str}", "%Y-%m-%d %H:%M")
+
+                        # 移動時間（時間単位を分単位に変換）
+                        travel_minutes = int(item_travel_time_hours * 60)
+                        travel_delta = timedelta(minutes=travel_minutes)
+
+                        # 前の移動時間予定
+                        before_travel_start = main_start - travel_delta
+                        before_travel_end = main_start
+                        expanded_dates.append({
+                            'date': before_travel_start.strftime('%Y-%m-%d'),
+                            'time': before_travel_start.strftime('%H:%M'),
+                            'end_time': before_travel_end.strftime('%H:%M'),
+                            'title': '移動時間（行き）',
+                            'description': f'{title}への移動'
+                        })
+
+                        # メイン予定
+                        expanded_dates.append({
+                            'date': date_str,
+                            'time': time_str,
+                            'end_time': end_time_str,
+                            'title': title,
+                            'description': date_info.get('description', '')
+                        })
+
+                        # 後の移動時間予定
+                        after_travel_start = main_end
+                        after_travel_end = main_end + travel_delta
+                        expanded_dates.append({
+                            'date': after_travel_start.strftime('%Y-%m-%d'),
+                            'time': after_travel_start.strftime('%H:%M'),
+                            'end_time': after_travel_end.strftime('%H:%M'),
+                            'title': '移動時間（帰り）',
+                            'description': f'{title}からの移動'
+                        })
+                    else:
+                        # 日時が不完全な場合はそのまま追加
+                        expanded_dates.append(date_info)
+                else:
+                    # 移動時間がない場合はそのまま追加
+                    expanded_dates.append(date_info)
+
+            # 展開後の予定リストを使用
+            dates = expanded_dates if expanded_dates else dates
+
             for date_info in dates:
                 try:
                     # 日時を構築
