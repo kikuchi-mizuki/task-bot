@@ -196,6 +196,17 @@ class AIService:
             print(f"[DEBUG] datesループ: {d}")
             phrase = d.get('description', '') or original_text
 
+            # まず「X時以降」を最優先でチェック（早期リターンより前に処理）
+            time_after_match = re.search(r'(\d{1,2})時以降', original_text) or re.search(r'(\d{1,2})時以降', phrase)
+            if time_after_match:
+                hour = int(time_after_match.group(1))
+                # timeが未設定の場合は設定
+                if not d.get('time'):
+                    d['time'] = f"{hour:02d}:00"
+                # end_timeは常に23:59に強制設定（AIが誤って18:00などに設定していても上書き）
+                d['end_time'] = '23:59'
+                print(f"[DEBUG] X時以降を検出し強制設定: {hour}時以降 -> time={d['time']}, end_time={d['end_time']}")
+
             # 「来週」「来月」などの複数日展開が必要なキーワードをチェック
             needs_multi_day_expansion = (
                 re.search(r'来週', phrase) or
@@ -209,22 +220,13 @@ class AIService:
             if d.get('time') and d.get('end_time') and not needs_multi_day_expansion:
                 new_dates.append(d)
                 continue
+
             # time, end_timeが空欄の場合のみ補完
             # 範囲表現
             range_match = re.search(r'(\d{1,2})[\-〜~](\d{1,2})時', phrase)
             if range_match:
                 d['time'] = f"{int(range_match.group(1)):02d}:00"
                 d['end_time'] = f"{int(range_match.group(2)):02d}:00"
-            # X時以降（元のテキストまたはdescriptionに含まれる場合、強制的に23:59に設定）
-            time_after_match = re.search(r'(\d{1,2})時以降', original_text) or re.search(r'(\d{1,2})時以降', phrase)
-            if time_after_match:
-                hour = int(time_after_match.group(1))
-                # timeが未設定の場合は設定
-                if not d.get('time'):
-                    d['time'] = f"{hour:02d}:00"
-                # end_timeは常に23:59に強制設定（AIが誤って18:00などに設定していても上書き）
-                d['end_time'] = '23:59'
-                print(f"[DEBUG] X時以降を検出し強制設定: {hour}時以降 -> time={d['time']}, end_time={d['end_time']}")
             # 終日
             if (not d.get('time') and not d.get('end_time')) or re.search(r'終日', phrase):
                 d['time'] = '00:00'
