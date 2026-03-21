@@ -387,7 +387,8 @@ class LineBotHandler:
                     events_by_date[date_str].append(date_info)
 
             # 日付ごとにカレンダーイベントを取得（1日1回のAPIコール）
-            all_conflicts = []
+            conflicting_dates = {}  # 日付ごとの重複情報
+            non_conflicting_events = []  # 重複のないイベント
             existing_events_cache = {}
 
             for date_str, date_events in events_by_date.items():
@@ -429,6 +430,7 @@ class LineBotHandler:
                     existing_events_cache[date_str] = existing_events
 
                     # 各予定に対して重複チェック（メモリ内で実施）
+                    date_has_conflict = False
                     for event_info in date_events:
                         time_str = event_info.get('time')
                         end_time_str = event_info.get('end_time')
@@ -447,25 +449,45 @@ class LineBotHandler:
                             event_end = self.jst.localize(event_end)
 
                         # 既存予定との重複をチェック
+                        has_conflict = False
                         for existing in existing_events:
                             existing_start = parser.parse(existing.get('start', ''))
                             existing_end = parser.parse(existing.get('end', ''))
 
                             # 重複判定：新予定の開始が既存の終了より前 AND 新予定の終了が既存の開始より後
                             if event_start < existing_end and event_end > existing_start:
-                                conflict_info = {
-                                    'new_event_title': title,
-                                    'new_event_time': f"{time_str}~{end_time_str}",
-                                    'existing_title': existing.get('title', '予定なし'),
-                                    'existing_start': existing.get('start', ''),
-                                    'existing_end': existing.get('end', '')
-                                }
-                                # 重複を避ける
-                                if not any(c['existing_start'] == conflict_info['existing_start'] and
-                                          c['existing_end'] == conflict_info['existing_end'] and
-                                          c['existing_title'] == conflict_info['existing_title']
-                                          for c in all_conflicts):
-                                    all_conflicts.append(conflict_info)
+                                has_conflict = True
+                                date_has_conflict = True
+
+                                # 日付ごとに重複情報を保存
+                                if date_str not in conflicting_dates:
+                                    conflicting_dates[date_str] = {
+                                        'events': [],
+                                        'conflicts': []
+                                    }
+
+                                # 既存の重複リストに同じものがなければ追加
+                                conflict_exists = any(
+                                    c['title'] == existing.get('title', '予定なし') and
+                                    c['start'] == existing.get('start', '') and
+                                    c['end'] == existing.get('end', '')
+                                    for c in conflicting_dates[date_str]['conflicts']
+                                )
+                                if not conflict_exists:
+                                    conflicting_dates[date_str]['conflicts'].append({
+                                        'title': existing.get('title', '予定なし'),
+                                        'start': existing.get('start', ''),
+                                        'end': existing.get('end', '')
+                                    })
+
+                        # 重複がある日付の場合は、その日の全イベントを記録
+                        if date_has_conflict and date_str in conflicting_dates:
+                            if event_info not in conflicting_dates[date_str]['events']:
+                                conflicting_dates[date_str]['events'].append(event_info)
+
+                    # この日に重複がない場合は、自動追加リストに追加
+                    if not date_has_conflict:
+                        non_conflicting_events.extend(date_events)
 
                 except Exception as e:
                     print(f"[DEBUG] 日付 {date_str} の重複チェック中にエラー: {e}")
@@ -473,62 +495,141 @@ class LineBotHandler:
                     traceback.print_exc()
                     continue
 
-            # 重複が見つかった場合は確認メッセージを表示
-            if all_conflicts:
-                print(f"[DEBUG] 重複予定を検出（{len(all_conflicts)}件）")
-                response_text = "⚠️ この時間帯に既に予定が存在します:\n"
-                for conflict in all_conflicts:
-                    # 時間をフォーマット
-                    start_time = conflict['existing_start']
-                    end_time = conflict['existing_end']
-                    if 'T' in start_time:
-                        start_dt = parser.parse(start_time)
-                        end_dt = parser.parse(end_time)
-                        start_dt = start_dt.astimezone(self.jst)
-                        end_dt = end_dt.astimezone(self.jst)
-                        time_str = f"{start_dt.strftime('%H:%M')}~{end_dt.strftime('%H:%M')}"
-                    else:
-                        time_str = f"{start_time}~{end_time}"
+            # 重複していない予定を自動的に追加
+            auto_added_count = 0
+            auto_added_dates = []
+            if non_conflicting_events:
+                print(f"[DEBUG] 重複のない予定を自動追加: {len(non_conflicting_events)}件")
+                for event_info in non_conflicting_events:
+                    try:
+                        date_str = event_info.get('date')
+                        time_str = event_info.get('time')
+                        end_time_str = event_info.get('end_time')
+                        title = event_info.get('title', '予定')
+                        description = event_info.get('description', '')
 
-                    response_text += f"- {conflict['existing_title']}\n({time_str})\n"
+                        if not date_str or not time_str or not end_time_str:
+                            continue
 
-                response_text += "\nそれでも追加しますか？\n「はい」と返信してください。"
+                        # 日時文字列を構築
+                        start_datetime_str = f"{date_str}T{time_str}:00+09:00"
+                        end_datetime_str = f"{date_str}T{end_time_str}:00+09:00"
 
-                # 全イベント（移動時間含む）をpending_eventsに保存
-                all_events = []
-                for date_info in dates:
-                    event_date_str = date_info.get('date')
-                    event_time_str = date_info.get('time')
-                    event_end_time_str = date_info.get('end_time')
-                    event_title = date_info.get('title', '予定')
-                    event_description = date_info.get('description', '')
+                        # 日時をパース
+                        start_datetime = parser.parse(start_datetime_str)
+                        end_datetime = parser.parse(end_datetime_str)
 
-                    if not event_date_str or not event_time_str:
+                        if start_datetime.tzinfo is None:
+                            start_datetime = self.jst.localize(start_datetime)
+                        if end_datetime.tzinfo is None:
+                            end_datetime = self.jst.localize(end_datetime)
+
+                        # 予定を追加
+                        success, message, result = self.calendar_service.add_event(
+                            title,
+                            start_datetime,
+                            end_datetime,
+                            description,
+                            line_user_id=line_user_id,
+                            force_add=True
+                        )
+
+                        if success:
+                            auto_added_count += 1
+                            if date_str not in auto_added_dates:
+                                auto_added_dates.append(date_str)
+                            print(f"[DEBUG] 予定追加成功: {date_str} {title}")
+
+                    except Exception as e:
+                        print(f"[DEBUG] 予定自動追加エラー: {e}")
                         continue
 
-                    # 終了時間が設定されていない場合は1時間後に設定
-                    if not event_end_time_str or event_end_time_str == event_time_str:
-                        from datetime import datetime, timedelta
-                        time_obj = datetime.strptime(event_time_str, "%H:%M")
-                        end_time_obj = time_obj + timedelta(hours=1)
-                        event_end_time_str = end_time_obj.strftime("%H:%M")
+            # 重複が見つかった場合は日付ごとに確認メッセージを表示
+            if conflicting_dates:
+                print(f"[DEBUG] 重複予定を検出（{len(conflicting_dates)}日分）")
+                response_text = ""
 
-                    event_datetime_str = f"{event_date_str}T{event_time_str}:00+09:00"
-                    event_end_datetime_str = f"{event_date_str}T{event_end_time_str}:00+09:00"
+                # 自動追加された予定がある場合
+                if auto_added_count > 0:
+                    # 日付を整形
+                    formatted_dates = []
+                    for date_str in sorted(auto_added_dates):
+                        dt = parser.parse(date_str)
+                        formatted_dates.append(f"{dt.month}/{dt.day}")
 
-                    all_events.append({
-                        'title': event_title,
-                        'start_datetime': event_datetime_str,
-                        'end_datetime': event_end_datetime_str,
-                        'description': event_description
-                    })
+                    response_text += f"✅ {len(auto_added_dates)}日分の予定を追加しました\n"
+                    response_text += f"（{', '.join(formatted_dates)}）\n\n"
+
+                response_text += "⚠️ 以下の日付で既存予定と重複しています:\n\n"
+
+                for date_str in sorted(conflicting_dates.keys()):
+                    dt = parser.parse(date_str)
+                    response_text += f"【{dt.month}/{dt.day}（{['月','火','水','木','金','土','日'][dt.weekday()]}）】\n"
+
+                    for conflict in conflicting_dates[date_str]['conflicts']:
+                        # 時間をフォーマット
+                        start_time = conflict['start']
+                        end_time = conflict['end']
+                        if 'T' in start_time:
+                            start_dt = parser.parse(start_time)
+                            end_dt = parser.parse(end_time)
+                            start_dt = start_dt.astimezone(self.jst)
+                            end_dt = end_dt.astimezone(self.jst)
+                            time_str = f"{start_dt.strftime('%H:%M')}~{end_dt.strftime('%H:%M')}"
+                        else:
+                            time_str = f"{start_time}~{end_time}"
+
+                        response_text += f"  - {conflict['title']} ({time_str})\n"
+
+                response_text += "\nこれらの日も追加しますか？\n「はい」と返信してください。"
+
+                # 重複している日のイベントのみをpending_eventsに保存
+                pending_events = []
+                for date_str, conflict_data in conflicting_dates.items():
+                    for event_info in conflict_data['events']:
+                        event_date_str = event_info.get('date')
+                        event_time_str = event_info.get('time')
+                        event_end_time_str = event_info.get('end_time')
+                        event_title = event_info.get('title', '予定')
+                        event_description = event_info.get('description', '')
+
+                        if not event_date_str or not event_time_str:
+                            continue
+
+                        # 終了時間が設定されていない場合は1時間後に設定
+                        if not event_end_time_str or event_end_time_str == event_time_str:
+                            time_obj = datetime.strptime(event_time_str, "%H:%M")
+                            end_time_obj = time_obj + timedelta(hours=1)
+                            event_end_time_str = end_time_obj.strftime("%H:%M")
+
+                        event_datetime_str = f"{event_date_str}T{event_time_str}:00+09:00"
+                        event_end_datetime_str = f"{event_date_str}T{event_end_time_str}:00+09:00"
+
+                        pending_events.append({
+                            'title': event_title,
+                            'start_datetime': event_datetime_str,
+                            'end_datetime': event_end_datetime_str,
+                            'description': event_description
+                        })
 
                 import json
-                self.db_helper.save_pending_event(line_user_id, json.dumps(all_events))
+                self.db_helper.save_pending_event(line_user_id, json.dumps(pending_events))
 
                 return TextSendMessage(text=response_text)
 
-            # 重複がない場合は予定を追加
+            # 全て重複なしの場合は成功メッセージのみ
+            if auto_added_count > 0:
+                # 日付を整形
+                formatted_dates = []
+                for date_str in sorted(auto_added_dates):
+                    dt = parser.parse(date_str)
+                    formatted_dates.append(f"{dt.month}/{dt.day}")
+
+                response_text = f"✅ {len(auto_added_dates)}日分の予定を追加しました！\n"
+                response_text += f"（{', '.join(formatted_dates)}）"
+                return TextSendMessage(text=response_text)
+
+            # 予定追加処理（古いロジック - 実質的には使われない）
             for date_info in dates:
                 try:
                     # 日時を構築
