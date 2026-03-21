@@ -118,6 +118,19 @@ class DBHelper:
                         created_at TEXT
                     )
                 ''')
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS conversation_history (
+                        id SERIAL PRIMARY KEY,
+                        line_user_id TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                ''')
+                c.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_conversation_user_time
+                    ON conversation_history(line_user_id, created_at DESC)
+                ''')
             else:
                 # SQLite
                 c.execute('''
@@ -143,6 +156,19 @@ class DBHelper:
                         event_json TEXT,
                         created_at TEXT
                     )
+                ''')
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS conversation_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        line_user_id TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                ''')
+                c.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_conversation_user_time
+                    ON conversation_history(line_user_id, created_at DESC)
                 ''')
             self.conn.commit()
         
@@ -402,4 +428,70 @@ class DBHelper:
             c.execute('DELETE FROM pending_events WHERE line_user_id=%s', (line_user_id,))
         else:
             c.execute('DELETE FROM pending_events WHERE line_user_id=?', (line_user_id,))
+        self.conn.commit()
+
+    def save_conversation_message(self, line_user_id, role, content):
+        """会話メッセージを保存（role: 'user' or 'assistant'）"""
+        now = datetime.utcnow().isoformat()
+        c = self.conn.cursor()
+        if self.is_postgres:
+            c.execute('''
+                INSERT INTO conversation_history (line_user_id, role, content, created_at)
+                VALUES (%s, %s, %s, %s)
+            ''', (line_user_id, role, content, now))
+        else:
+            c.execute('''
+                INSERT INTO conversation_history (line_user_id, role, content, created_at)
+                VALUES (?, ?, ?, ?)
+            ''', (line_user_id, role, content, now))
+        self.conn.commit()
+
+    def get_conversation_history(self, line_user_id, limit=10):
+        """直近N件の会話履歴を取得"""
+        c = self.conn.cursor()
+        if self.is_postgres:
+            c.execute('''
+                SELECT role, content, created_at
+                FROM conversation_history
+                WHERE line_user_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            ''', (line_user_id, limit))
+        else:
+            c.execute('''
+                SELECT role, content, created_at
+                FROM conversation_history
+                WHERE line_user_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+            ''', (line_user_id, limit))
+        rows = c.fetchall()
+        # 時系列順に並び替え（古い順）
+        return [{'role': row[0], 'content': row[1], 'created_at': row[2]} for row in reversed(rows)]
+
+    def clear_old_conversation_history(self, line_user_id, keep_count=20):
+        """古い会話履歴を削除（最新N件のみ保持）"""
+        c = self.conn.cursor()
+        if self.is_postgres:
+            c.execute('''
+                DELETE FROM conversation_history
+                WHERE line_user_id = %s
+                AND id NOT IN (
+                    SELECT id FROM conversation_history
+                    WHERE line_user_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                )
+            ''', (line_user_id, line_user_id, keep_count))
+        else:
+            c.execute('''
+                DELETE FROM conversation_history
+                WHERE line_user_id = ?
+                AND id NOT IN (
+                    SELECT id FROM conversation_history
+                    WHERE line_user_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                )
+            ''', (line_user_id, line_user_id, keep_count))
         self.conn.commit()

@@ -350,9 +350,15 @@ class LineBotHandler:
             
             if not self.ai_service:
                 return TextSendMessage(text="AIサービスの初期化に失敗しました。OpenAI APIキーを設定してください。")
-            
-            # AIを使ってメッセージの意図を判断
-            ai_result = self.ai_service.extract_dates_and_times(user_message)
+
+            # 会話履歴を取得
+            conversation_history = self.db_helper.get_conversation_history(line_user_id, limit=5)
+
+            # ユーザーメッセージを会話履歴に保存
+            self.db_helper.save_conversation_message(line_user_id, 'user', user_message)
+
+            # AIを使ってメッセージの意図を判断（会話履歴を渡す）
+            ai_result = self.ai_service.extract_dates_and_times(user_message, conversation_history)
             print(f"[DEBUG] ai_result: {ai_result}")
             
             if 'error' in ai_result:
@@ -362,12 +368,15 @@ class LineBotHandler:
             # タスクタイプに基づいて処理
             task_type = ai_result.get('task_type', 'add_event')
 
+            # 応答を生成し、会話履歴に保存
+            response_message = None
+
             if task_type == 'show_schedule':
                 print(f"[DEBUG] show_schedule: {ai_result.get('dates', [])}")
-                return self._handle_show_schedule(ai_result.get('dates', []), line_user_id)
+                response_message = self._handle_show_schedule(ai_result.get('dates', []), line_user_id)
             elif task_type == 'availability_check':
                 print(f"[DEBUG] dates_info: {ai_result.get('dates', [])}")
-                return self._handle_availability_check(ai_result.get('dates', []), line_user_id)
+                response_message = self._handle_availability_check(ai_result.get('dates', []), line_user_id)
             elif task_type == 'add_event':
                 # 予定追加時の重複確認ロジック（複数予定対応）
                 if not self.calendar_service:
@@ -379,10 +388,19 @@ class LineBotHandler:
                     return TextSendMessage(text="イベント情報を正しく認識できませんでした。\n\n例: 「明日の午前9時から会議を追加して」\n「来週月曜日の14時から打ち合わせ」")
 
                 # 複数の予定を処理
-                return self._handle_multiple_events(dates, line_user_id, travel_time_hours)
+                response_message = self._handle_multiple_events(dates, line_user_id, travel_time_hours)
             else:
                 # 未対応コマンドの場合もガイダンスメッセージ
-                return TextSendMessage(text="日時の送信で空き時間が分かります！\n日時と内容の送信で予定を追加します！\n\n例：\n・「明日の空き時間」\n・「7/15 15:00〜16:00の空き時間」\n・「明日の午前9時から会議を追加して」\n・「来週月曜日の14時から打ち合わせ」")
+                response_message = TextSendMessage(text="日時の送信で空き時間が分かります！\n日時と内容の送信で予定を追加します！\n\n例：\n・「明日の空き時間」\n・「7/15 15:00〜16:00の空き時間」\n・「明日の午前9時から会議を追加して」\n・「来週月曜日の14時から打ち合わせ」")
+
+            # 応答を会話履歴に保存
+            if response_message and hasattr(response_message, 'text'):
+                self.db_helper.save_conversation_message(line_user_id, 'assistant', response_message.text)
+                # 古い会話履歴をクリーンアップ（最新20件のみ保持）
+                self.db_helper.clear_old_conversation_history(line_user_id, keep_count=20)
+
+            return response_message
+
         except Exception as e:
             return TextSendMessage(text=f"エラーが発生しました: {str(e)}")
     

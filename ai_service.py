@@ -24,8 +24,13 @@ class AIService:
         now = datetime.now(pytz.timezone('Asia/Tokyo'))
         return now.strftime('%Y-%m-%dT%H:%M:%S%z')
     
-    def extract_dates_and_times(self, text):
-        """テキストから日時を抽出し、タスクの種類を判定します"""
+    def extract_dates_and_times(self, text, conversation_history=None):
+        """テキストから日時を抽出し、タスクの種類を判定します
+
+        Args:
+            text: ユーザーのメッセージ
+            conversation_history: 会話履歴 [{'role': 'user'/'assistant', 'content': '...'}]
+        """
         try:
             now_jst = self._get_jst_now_str()
             system_prompt = (
@@ -87,18 +92,27 @@ class AIService:
                 "入力例：「4/1.2.3 6:00~8:30 TSP 移動時間1時間」\n"
                 "{\n  \"task_type\": \"add_event\",\n  \"dates\": [\n    {\n      \"date\": \"2025-04-01\",\n      \"time\": \"06:00\",\n      \"end_time\": \"08:30\",\n      \"title\": \"TSP\"\n    },\n    {\n      \"date\": \"2025-04-02\",\n      \"time\": \"06:00\",\n      \"end_time\": \"08:30\",\n      \"title\": \"TSP\"\n    },\n    {\n      \"date\": \"2025-04-03\",\n      \"time\": \"06:00\",\n      \"end_time\": \"08:30\",\n      \"title\": \"TSP\"\n    }\n  ],\n  \"travel_time_hours\": 1.0\n}\n"
             )
+
+            # メッセージ構築（会話履歴を含める）
+            messages = [{"role": "system", "content": system_prompt}]
+
+            # 会話履歴を追加（最新5件まで）
+            if conversation_history:
+                for msg in conversation_history[-5:]:
+                    messages.append({
+                        "role": msg['role'],
+                        "content": msg['content']
+                    })
+
+            # 現在のユーザーメッセージを追加
+            messages.append({
+                "role": "user",
+                "content": text
+            })
+
             response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": system_prompt
-                    },
-                    {
-                        "role": "user",
-                        "content": text
-                    }
-                ],
+                messages=messages,
                 temperature=0.1
             )
             result = response.choices[0].message.content
