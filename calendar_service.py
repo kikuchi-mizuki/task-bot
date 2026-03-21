@@ -243,12 +243,13 @@ class GoogleCalendarService:
             logger.error(f"[ERROR] add_eventで例外発生: {e}")
             return False, f"エラーが発生しました: {str(e)}", None
 
-    def add_events_batch(self, events_data, line_user_id=None):
-        """複数のイベントを一度に追加します（Batch API使用）
+    def add_events_batch(self, events_data, line_user_id=None, chunk_size=10):
+        """複数のイベントを一度に追加します（Batch API使用、チャンク分割対応）
 
         Args:
             events_data: イベント情報のリスト [{'title': str, 'start_datetime': datetime, 'end_datetime': datetime, 'description': str}, ...]
             line_user_id: LINEユーザーID（認証トークン取得用）
+            chunk_size: 1回のバッチリクエストで処理するイベント数（デフォルト: 10）
 
         Returns:
             (成功件数, 失敗件数, 詳細結果)
@@ -262,63 +263,92 @@ class GoogleCalendarService:
                 logger.error("[ERROR] カレンダーサービスの取得に失敗")
                 return 0, len(events_data), []
 
-            # バッチリクエストを作成
-            batch = service.new_batch_http_request()
-
-            results = {
+            # 全体の結果を格納
+            total_results = {
                 'success': [],
                 'failed': []
             }
 
-            def callback(request_id, response, exception):
-                """バッチリクエストのコールバック"""
-                if exception is not None:
-                    logger.error(f"[ERROR] Batch request {request_id} failed: {exception}")
-                    results['failed'].append({
-                        'request_id': request_id,
-                        'error': str(exception)
-                    })
-                else:
-                    logger.info(f"[DEBUG] Batch request {request_id} success: {response.get('summary', 'No title')}")
-                    results['success'].append({
-                        'request_id': request_id,
-                        'event': response
-                    })
+            # イベントをチャンクに分割
+            total_events = len(events_data)
+            num_chunks = (total_events + chunk_size - 1) // chunk_size  # 切り上げ除算
 
-            # バッチにリクエストを追加
-            for idx, event_data in enumerate(events_data):
-                event = {
-                    'summary': event_data['title'],
-                    'description': event_data.get('description', ''),
-                    'start': {
-                        'dateTime': event_data['start_datetime'].isoformat(),
-                        'timeZone': 'Asia/Tokyo',
-                    },
-                    'end': {
-                        'dateTime': event_data['end_datetime'].isoformat(),
-                        'timeZone': 'Asia/Tokyo',
-                    },
+            logger.info(f"[DEBUG] Batch API実行開始: 全{total_events}件を{num_chunks}チャンク（{chunk_size}件ずつ）に分割して処理")
+
+            # チャンクごとに処理
+            for chunk_idx in range(num_chunks):
+                start_idx = chunk_idx * chunk_size
+                end_idx = min(start_idx + chunk_size, total_events)
+                chunk_events = events_data[start_idx:end_idx]
+
+                logger.info(f"[DEBUG] チャンク {chunk_idx + 1}/{num_chunks} 処理開始: {start_idx + 1}〜{end_idx}件目（{len(chunk_events)}件）")
+
+                # バッチリクエストを作成
+                batch = service.new_batch_http_request()
+
+                # チャンク用の結果
+                chunk_results = {
+                    'success': [],
+                    'failed': []
                 }
 
-                batch.add(
-                    service.events().insert(
-                        calendarId=Config.GOOGLE_CALENDAR_ID,
-                        body=event
-                    ),
-                    callback=callback,
-                    request_id=str(idx)
-                )
+                def make_callback(chunk_results):
+                    """クロージャを使ってchunk_resultsをキャプチャ"""
+                    def callback(request_id, response, exception):
+                        """バッチリクエストのコールバック"""
+                        if exception is not None:
+                            logger.error(f"[ERROR] Batch request {request_id} failed: {exception}")
+                            chunk_results['failed'].append({
+                                'request_id': request_id,
+                                'error': str(exception)
+                            })
+                        else:
+                            logger.info(f"[DEBUG] Batch request {request_id} success: {response.get('summary', 'No title')}")
+                            chunk_results['success'].append({
+                                'request_id': request_id,
+                                'event': response
+                            })
+                    return callback
 
-            logger.info(f"[DEBUG] Batch API実行開始: {len(events_data)}件のイベントを追加")
-            # バッチリクエストを実行
-            batch.execute()
+                # バッチにリクエストを追加
+                for idx, event_data in enumerate(chunk_events):
+                    event = {
+                        'summary': event_data['title'],
+                        'description': event_data.get('description', ''),
+                        'start': {
+                            'dateTime': event_data['start_datetime'].isoformat(),
+                            'timeZone': 'Asia/Tokyo',
+                        },
+                        'end': {
+                            'dateTime': event_data['end_datetime'].isoformat(),
+                            'timeZone': 'Asia/Tokyo',
+                        },
+                    }
 
-            success_count = len(results['success'])
-            failed_count = len(results['failed'])
+                    batch.add(
+                        service.events().insert(
+                            calendarId=Config.GOOGLE_CALENDAR_ID,
+                            body=event
+                        ),
+                        callback=make_callback(chunk_results),
+                        request_id=f"{chunk_idx}_{idx}"
+                    )
 
-            logger.info(f"[DEBUG] Batch API実行完了: 成功={success_count}件, 失敗={failed_count}件")
+                # バッチリクエストを実行
+                batch.execute()
 
-            return success_count, failed_count, results
+                # チャンクの結果を全体に集計
+                total_results['success'].extend(chunk_results['success'])
+                total_results['failed'].extend(chunk_results['failed'])
+
+                logger.info(f"[DEBUG] チャンク {chunk_idx + 1}/{num_chunks} 完了: 成功={len(chunk_results['success'])}件, 失敗={len(chunk_results['failed'])}件")
+
+            success_count = len(total_results['success'])
+            failed_count = len(total_results['failed'])
+
+            logger.info(f"[DEBUG] Batch API全体完了: 成功={success_count}件, 失敗={failed_count}件")
+
+            return success_count, failed_count, total_results
 
         except Exception as e:
             logger.error(f"[ERROR] add_events_batchで例外発生: {e}")
