@@ -195,8 +195,18 @@ class AIService:
         for d in parsed['dates']:
             print(f"[DEBUG] datesループ: {d}")
             phrase = d.get('description', '') or original_text
-            # time, end_timeが両方セットされていれば何もしない
-            if d.get('time') and d.get('end_time'):
+
+            # 「来週」「来月」などの複数日展開が必要なキーワードをチェック
+            needs_multi_day_expansion = (
+                re.search(r'来週', phrase) or
+                re.search(r'来週', original_text) or
+                re.search(r'来月', phrase) or
+                re.search(r'来月', original_text) or
+                re.search(r'\d{1,2}月(?!.*日)', phrase)  # 「X月」（日付なし）
+            )
+
+            # time, end_timeが両方セットされていて、かつ複数日展開が不要な場合はそのまま追加
+            if d.get('time') and d.get('end_time') and not needs_multi_day_expansion:
                 new_dates.append(d)
                 continue
             # time, end_timeが空欄の場合のみ補完
