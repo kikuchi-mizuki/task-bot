@@ -499,8 +499,9 @@ class LineBotHandler:
             auto_added_count = 0
             auto_added_dates = []
             if non_conflicting_events:
-                print(f"[DEBUG] 重複のない予定を自動追加: {len(non_conflicting_events)}件")
-                for event_info in non_conflicting_events:
+                total_events = len(non_conflicting_events)
+                print(f"[DEBUG] 重複のない予定を自動追加: {total_events}件")
+                for idx, event_info in enumerate(non_conflicting_events, 1):
                     try:
                         date_str = event_info.get('date')
                         time_str = event_info.get('time')
@@ -538,7 +539,9 @@ class LineBotHandler:
                             auto_added_count += 1
                             if date_str not in auto_added_dates:
                                 auto_added_dates.append(date_str)
-                            print(f"[DEBUG] 予定追加成功: {date_str} {title}")
+                            print(f"[DEBUG] 予定追加成功 ({idx}/{total_events}): {date_str} {title}")
+                        else:
+                            print(f"[DEBUG] 予定追加失敗 ({idx}/{total_events}): {date_str} {title} - {message}")
 
                     except Exception as e:
                         print(f"[DEBUG] 予定自動追加エラー: {e}")
