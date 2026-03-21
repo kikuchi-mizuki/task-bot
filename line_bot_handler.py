@@ -376,6 +376,116 @@ class LineBotHandler:
             # 展開後の予定リストを使用
             dates = expanded_dates if expanded_dates else dates
 
+            # 最初に全ての予定の重複チェックを実施
+            all_conflicts = []
+            for date_info in dates:
+                try:
+                    # 日時を構築
+                    date_str = date_info.get('date')
+                    time_str = date_info.get('time')
+                    end_time_str = date_info.get('end_time')
+                    title = date_info.get('title', '予定')
+
+                    if not date_str or not time_str:
+                        continue
+
+                    # 終了時間が設定されていない場合は1時間後に設定
+                    if not end_time_str or end_time_str == time_str:
+                        from datetime import datetime, timedelta
+                        time_obj = datetime.strptime(time_str, "%H:%M")
+                        end_time_obj = time_obj + timedelta(hours=1)
+                        end_time_str = end_time_obj.strftime("%H:%M")
+
+                    # 日時文字列を構築
+                    start_datetime_str = f"{date_str}T{time_str}:00+09:00"
+                    end_datetime_str = f"{date_str}T{end_time_str}:00+09:00"
+
+                    # 日時をパース
+                    start_datetime = parser.parse(start_datetime_str)
+                    end_datetime = parser.parse(end_datetime_str)
+
+                    if start_datetime.tzinfo is None:
+                        start_datetime = self.jst.localize(start_datetime)
+                    if end_datetime.tzinfo is None:
+                        end_datetime = self.jst.localize(end_datetime)
+
+                    # 既存予定をチェック
+                    events = self.calendar_service.get_events_for_time_range(start_datetime, end_datetime, line_user_id)
+                    if events:
+                        for event in events:
+                            conflict_info = {
+                                'new_event_title': title,
+                                'new_event_time': f"{time_str}~{end_time_str}",
+                                'existing_title': event.get('title', '予定なし'),
+                                'existing_start': event.get('start', ''),
+                                'existing_end': event.get('end', '')
+                            }
+                            # 重複を避けるため、同じ重複がリストにない場合のみ追加
+                            if not any(c['existing_start'] == conflict_info['existing_start'] and
+                                      c['existing_end'] == conflict_info['existing_end'] and
+                                      c['existing_title'] == conflict_info['existing_title']
+                                      for c in all_conflicts):
+                                all_conflicts.append(conflict_info)
+                except Exception as e:
+                    print(f"[DEBUG] 重複チェック中にエラー: {e}")
+                    continue
+
+            # 重複が見つかった場合は確認メッセージを表示
+            if all_conflicts:
+                print(f"[DEBUG] 重複予定を検出（{len(all_conflicts)}件）")
+                response_text = "⚠️ この時間帯に既に予定が存在します:\n"
+                for conflict in all_conflicts:
+                    # 時間をフォーマット
+                    start_time = conflict['existing_start']
+                    end_time = conflict['existing_end']
+                    if 'T' in start_time:
+                        start_dt = parser.parse(start_time)
+                        end_dt = parser.parse(end_time)
+                        start_dt = start_dt.astimezone(self.jst)
+                        end_dt = end_dt.astimezone(self.jst)
+                        time_str = f"{start_dt.strftime('%H:%M')}~{end_dt.strftime('%H:%M')}"
+                    else:
+                        time_str = f"{start_time}~{end_time}"
+
+                    response_text += f"- {conflict['existing_title']}\n({time_str})\n"
+
+                response_text += "\nそれでも追加しますか？\n「はい」と返信してください。"
+
+                # 全イベント（移動時間含む）をpending_eventsに保存
+                all_events = []
+                for date_info in dates:
+                    event_date_str = date_info.get('date')
+                    event_time_str = date_info.get('time')
+                    event_end_time_str = date_info.get('end_time')
+                    event_title = date_info.get('title', '予定')
+                    event_description = date_info.get('description', '')
+
+                    if not event_date_str or not event_time_str:
+                        continue
+
+                    # 終了時間が設定されていない場合は1時間後に設定
+                    if not event_end_time_str or event_end_time_str == event_time_str:
+                        from datetime import datetime, timedelta
+                        time_obj = datetime.strptime(event_time_str, "%H:%M")
+                        end_time_obj = time_obj + timedelta(hours=1)
+                        event_end_time_str = end_time_obj.strftime("%H:%M")
+
+                    event_datetime_str = f"{event_date_str}T{event_time_str}:00+09:00"
+                    event_end_datetime_str = f"{event_date_str}T{event_end_time_str}:00+09:00"
+
+                    all_events.append({
+                        'title': event_title,
+                        'start_datetime': event_datetime_str,
+                        'end_datetime': event_end_datetime_str,
+                        'description': event_description
+                    })
+
+                import json
+                self.db_helper.save_pending_event(line_user_id, json.dumps(all_events))
+
+                return TextSendMessage(text=response_text)
+
+            # 重複がない場合は予定を追加
             for date_info in dates:
                 try:
                     # 日時を構築
@@ -384,101 +494,34 @@ class LineBotHandler:
                     end_time_str = date_info.get('end_time')
                     title = date_info.get('title', '予定')
                     description = date_info.get('description', '')
-                    
+
                     if not date_str or not time_str:
                         print(f"[DEBUG] 不完全な予定情報をスキップ: {date_info}")
                         continue
-                    
-                    # 終了時間が設定されていない場合は1時間後に設定（元の設定を維持）
+
+                    # 終了時間が設定されていない場合は1時間後に設定
                     if not end_time_str or end_time_str == time_str:
                         from datetime import datetime, timedelta
                         time_obj = datetime.strptime(time_str, "%H:%M")
                         end_time_obj = time_obj + timedelta(hours=1)
                         end_time_str = end_time_obj.strftime("%H:%M")
                         print(f"[DEBUG] 終了時間を自動設定: {time_str} -> {end_time_str}")
-                    
+
                     # 日時文字列を構築
                     start_datetime_str = f"{date_str}T{time_str}:00+09:00"
                     end_datetime_str = f"{date_str}T{end_time_str}:00+09:00"
-                    
+
                     print(f"[DEBUG] 予定追加処理: {title} - {start_datetime_str} to {end_datetime_str}")
-                    
-                    # 日時をパース（タイムゾーン処理を改善）
+
+                    # 日時をパース
                     start_datetime = parser.parse(start_datetime_str)
                     end_datetime = parser.parse(end_datetime_str)
-                    
-                    # 既にタイムゾーンが設定されている場合はそのまま使用、そうでなければJSTを設定
+
                     if start_datetime.tzinfo is None:
                         start_datetime = self.jst.localize(start_datetime)
                     if end_datetime.tzinfo is None:
                         end_datetime = self.jst.localize(end_datetime)
-                    
-                    # 既存予定をチェック
-                    events = self.calendar_service.get_events_for_time_range(start_datetime, end_datetime, line_user_id)
-                    if events:
-                        print(f"[DEBUG] 重複予定を検出: {title}")
-                        # 重複確認メッセージを表示
-                        conflicting_events = []
-                        for event in events:
-                            conflicting_events.append({
-                                'title': event.get('title', '予定なし'),
-                                'start': event.get('start', ''),
-                                'end': event.get('end', '')
-                            })
-                        
-                        # 重複確認メッセージを構築
-                        response_text = "⚠️ この時間帯に既に予定が存在します:\n"
-                        for event in conflicting_events:
-                            # 時間をフォーマット
-                            start_time = event['start']
-                            end_time = event['end']
-                            if 'T' in start_time:
-                                start_dt = parser.parse(start_time)
-                                end_dt = parser.parse(end_time)
-                                start_dt = start_dt.astimezone(self.jst)
-                                end_dt = end_dt.astimezone(self.jst)
-                                time_str = f"{start_dt.strftime('%H:%M')}~{end_dt.strftime('%H:%M')}"
-                            else:
-                                time_str = f"{start_time}~{end_time}"
-                            
-                            response_text += f"- {event['title']}\n({time_str})\n"
-                        
-                        response_text += "\nそれでも追加しますか？\n「はい」と返信してください。"
-                        
-                        # 全イベント（移動時間含む）をpending_eventsに保存
-                        all_events = []
-                        for date_info in dates:
-                            event_date_str = date_info.get('date')
-                            event_time_str = date_info.get('time')
-                            event_end_time_str = date_info.get('end_time')
-                            event_title = date_info.get('title', '予定')
-                            event_description = date_info.get('description', '')
-                            
-                            if not event_date_str or not event_time_str:
-                                continue
-                            
-                            # 終了時間が設定されていない場合は1時間後に設定
-                            if not event_end_time_str or event_end_time_str == event_time_str:
-                                from datetime import datetime, timedelta
-                                time_obj = datetime.strptime(event_time_str, "%H:%M")
-                                end_time_obj = time_obj + timedelta(hours=1)
-                                event_end_time_str = end_time_obj.strftime("%H:%M")
-                            
-                            event_datetime_str = f"{event_date_str}T{event_time_str}:00+09:00"
-                            event_end_datetime_str = f"{event_date_str}T{event_end_time_str}:00+09:00"
-                            
-                            all_events.append({
-                                'title': event_title,
-                                'start_datetime': event_datetime_str,
-                                'end_datetime': event_end_datetime_str,
-                                'description': event_description
-                            })
-                        
-                        import json
-                        self.db_helper.save_pending_event(line_user_id, json.dumps(all_events))
-                        
-                        return TextSendMessage(text=response_text)
-                    
+
                     # 予定を追加
                     success, message, result = self.calendar_service.add_event(
                         title,
