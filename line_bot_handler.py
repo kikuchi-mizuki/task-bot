@@ -116,28 +116,109 @@ class LineBotHandler:
                 # 単一イベントか複数イベントかを判定
                 if isinstance(events_data, list):
                     # 複数イベント（移動時間含む）の場合
+                    total_pending_events = len(events_data)
+
+                    # 20件以上の場合はバックグラウンド処理とBatch APIを使用
+                    if total_pending_events >= 20:
+                        print(f"[DEBUG] 大量の保留イベント検出: {total_pending_events}件、バックグラウンド処理を使用")
+
+                        # pending_eventsを削除
+                        self.db_helper.delete_pending_event(line_user_id)
+
+                        # バックグラウンド処理
+                        import threading
+
+                        def background_add_pending_events():
+                            """バックグラウンドで保留中の予定を追加"""
+                            try:
+                                from dateutil import parser
+
+                                # Batch API用にイベントデータを準備
+                                batch_events = []
+                                for event_info in events_data:
+                                    try:
+                                        start_datetime = parser.parse(event_info['start_datetime'])
+                                        end_datetime = parser.parse(event_info['end_datetime'])
+
+                                        if start_datetime.tzinfo is None:
+                                            start_datetime = self.jst.localize(start_datetime)
+                                        if end_datetime.tzinfo is None:
+                                            end_datetime = self.jst.localize(end_datetime)
+
+                                        batch_events.append({
+                                            'title': event_info['title'],
+                                            'start_datetime': start_datetime,
+                                            'end_datetime': end_datetime,
+                                            'description': event_info.get('description', ''),
+                                            'original_info': event_info
+                                        })
+                                    except Exception as e:
+                                        print(f"[DEBUG] イベントデータ準備エラー: {e}")
+
+                                # Batch APIで追加
+                                success_count, failed_count, results = self.calendar_service.add_events_batch(
+                                    batch_events,
+                                    line_user_id=line_user_id
+                                )
+
+                                # 結果メッセージを構築
+                                if success_count > 0:
+                                    result_text = f"✅ 処理が完了しました！\n\n{success_count}件の予定を追加しました"
+                                    if failed_count > 0:
+                                        result_text += f"\n\n⚠️ {failed_count}件の予定を追加できませんでした"
+                                else:
+                                    result_text = "❌ 予定を追加できませんでした"
+
+                                # プッシュメッセージで結果を送信
+                                self.line_bot_api.push_message(
+                                    line_user_id,
+                                    TextSendMessage(text=result_text)
+                                )
+                                print(f"[DEBUG] 保留イベント処理完了: 成功={success_count}件, 失敗={failed_count}件")
+
+                            except Exception as e:
+                                print(f"[DEBUG] バックグラウンド処理エラー: {e}")
+                                import traceback
+                                traceback.print_exc()
+                                try:
+                                    self.line_bot_api.push_message(
+                                        line_user_id,
+                                        TextSendMessage(text=f"❌ 予定追加中にエラーが発生しました: {str(e)}")
+                                    )
+                                except Exception as push_error:
+                                    print(f"[DEBUG] プッシュメッセージ送信エラー: {push_error}")
+
+                        # バックグラウンドスレッドを起動
+                        thread = threading.Thread(target=background_add_pending_events)
+                        thread.daemon = True
+                        thread.start()
+
+                        # 処理中メッセージを即座に返す
+                        return TextSendMessage(text=f"⏳ {total_pending_events}件の予定を追加中です...\n処理完了までお待ちください。")
+
+                    # 20件未満の場合は従来の処理（1件ずつ追加）
                     added_events = []
                     failed_events = []
-                    
+
                     for event_info in events_data:
                         try:
                             from dateutil import parser
                             start_datetime = parser.parse(event_info['start_datetime'])
                             end_datetime = parser.parse(event_info['end_datetime'])
-                            
+
                             # 既にタイムゾーンが設定されている場合はそのまま使用、そうでなければJSTを設定
                             if start_datetime.tzinfo is None:
                                 start_datetime = self.jst.localize(start_datetime)
                             if end_datetime.tzinfo is None:
                                 end_datetime = self.jst.localize(end_datetime)
-                            
+
                             if not self.calendar_service:
                                 failed_events.append({
                                     'title': event_info['title'],
                                     'reason': 'カレンダーサービスが初期化されていません'
                                 })
                                 continue
-                            
+
                             success, message, result = self.calendar_service.add_event(
                                 event_info['title'],
                                 start_datetime,
@@ -146,7 +227,7 @@ class LineBotHandler:
                                 line_user_id=line_user_id,
                                 force_add=True
                             )
-                            
+
                             if success:
                                 # 日時をフォーマット
                                 from datetime import datetime
@@ -157,7 +238,7 @@ class LineBotHandler:
                                 weekday = "月火水木金土日"[start_dt.weekday()]
                                 date_str = f"{start_dt.month}/{start_dt.day}（{weekday}）"
                                 time_str = f"{start_dt.strftime('%H:%M')}〜{end_dt.strftime('%H:%M')}"
-                                
+
                                 added_events.append({
                                     'title': event_info['title'],
                                     'time': f"{date_str}{time_str}"
@@ -172,7 +253,7 @@ class LineBotHandler:
                                 'title': event_info.get('title', '予定'),
                                 'reason': str(e)
                             })
-                    
+
                     self.db_helper.delete_pending_event(line_user_id)
                     
                     # 結果メッセージを構築（移動時間を含む場合は統一形式）
@@ -499,9 +580,17 @@ class LineBotHandler:
             # 重複していない予定を自動的に追加（Batch API使用）
             auto_added_count = 0
             auto_added_dates = []
+
+            # 大量の予定（20件以上）の場合、バックグラウンド処理を使用
+            use_background = False
             if non_conflicting_events:
                 total_events = len(non_conflicting_events)
                 print(f"[DEBUG] 重複のない予定をBatch APIで一括追加: {total_events}件")
+
+                # 20件以上の場合はバックグラウンド処理
+                if total_events >= 20:
+                    use_background = True
+                    print(f"[DEBUG] 大量予定検出: バックグラウンド処理を使用")
 
                 # Batch API用にイベントデータを準備
                 batch_events = []
@@ -543,28 +632,101 @@ class LineBotHandler:
 
                 # Batch APIで一括追加
                 if batch_events:
-                    success_count, failed_count, results = self.calendar_service.add_events_batch(
-                        batch_events,
-                        line_user_id=line_user_id
-                    )
+                    if use_background:
+                        # バックグラウンド処理を開始
+                        import threading
 
-                    auto_added_count = success_count
+                        def background_add_events():
+                            """バックグラウンドで予定を追加し、完了後にプッシュメッセージを送信"""
+                            try:
+                                print(f"[DEBUG] バックグラウンド処理開始: {len(batch_events)}件")
+                                success_count, failed_count, results = self.calendar_service.add_events_batch(
+                                    batch_events,
+                                    line_user_id=line_user_id
+                                )
+                                print(f"[DEBUG] バックグラウンド処理完了: 成功={success_count}件, 失敗={failed_count}件")
 
-                    # 追加された日付を集計
-                    for event_data in batch_events[:success_count]:
-                        date_str = event_data['date_str']
-                        if date_str not in auto_added_dates:
-                            auto_added_dates.append(date_str)
+                                # 追加された日付を集計
+                                added_dates = []
+                                for event_data in batch_events[:success_count]:
+                                    date_str = event_data['date_str']
+                                    if date_str not in added_dates:
+                                        added_dates.append(date_str)
 
-                    print(f"[DEBUG] Batch API結果: 成功={success_count}件, 失敗={failed_count}件")
+                                # 結果メッセージを構築
+                                if success_count > 0:
+                                    formatted_dates = []
+                                    for date_str in sorted(added_dates):
+                                        dt = parser.parse(date_str)
+                                        formatted_dates.append(f"{dt.month}/{dt.day}")
+
+                                    result_text = f"✅ 処理が完了しました！\n\n{len(added_dates)}日分の予定を追加しました\n（{', '.join(formatted_dates)}）"
+
+                                    if failed_count > 0:
+                                        result_text += f"\n\n⚠️ {failed_count}件の予定を追加できませんでした"
+                                else:
+                                    result_text = "❌ 予定を追加できませんでした"
+
+                                # プッシュメッセージで結果を送信
+                                self.line_bot_api.push_message(
+                                    line_user_id,
+                                    TextSendMessage(text=result_text)
+                                )
+                                print(f"[DEBUG] 結果メッセージ送信完了")
+
+                            except Exception as e:
+                                print(f"[DEBUG] バックグラウンド処理エラー: {e}")
+                                import traceback
+                                traceback.print_exc()
+                                # エラー時もプッシュメッセージで通知
+                                try:
+                                    self.line_bot_api.push_message(
+                                        line_user_id,
+                                        TextSendMessage(text=f"❌ 予定追加中にエラーが発生しました: {str(e)}")
+                                    )
+                                except Exception as push_error:
+                                    print(f"[DEBUG] プッシュメッセージ送信エラー: {push_error}")
+
+                        # バックグラウンドスレッドを起動
+                        thread = threading.Thread(target=background_add_events)
+                        thread.daemon = True
+                        thread.start()
+
+                        # 処理中メッセージを即座に返す
+                        processing_message = f"⏳ {total_events}件の予定を追加中です...\n処理完了までお待ちください。"
+                        if conflicting_dates:
+                            # 重複がある場合は、処理中メッセージの後に重複確認を表示
+                            auto_added_count = -1  # バックグラウンド処理中を示すフラグ
+                        else:
+                            # 重複がない場合は、処理中メッセージのみを返して終了
+                            return TextSendMessage(text=processing_message)
+                    else:
+                        # 通常処理（20件未満）
+                        success_count, failed_count, results = self.calendar_service.add_events_batch(
+                            batch_events,
+                            line_user_id=line_user_id
+                        )
+
+                        auto_added_count = success_count
+
+                        # 追加された日付を集計
+                        for event_data in batch_events[:success_count]:
+                            date_str = event_data['date_str']
+                            if date_str not in auto_added_dates:
+                                auto_added_dates.append(date_str)
+
+                        print(f"[DEBUG] Batch API結果: 成功={success_count}件, 失敗={failed_count}件")
 
             # 重複が見つかった場合は日付ごとに確認メッセージを表示
             if conflicting_dates:
                 print(f"[DEBUG] 重複予定を検出（{len(conflicting_dates)}日分）")
                 response_text = ""
 
-                # 自動追加された予定がある場合
-                if auto_added_count > 0:
+                # バックグラウンド処理中の場合
+                if auto_added_count == -1:
+                    response_text += f"⏳ {len(non_conflicting_events)}件の予定を追加中です...\n処理完了までお待ちください。\n\n"
+                # 自動追加された予定がある場合（通常処理）
+                elif auto_added_count > 0:
                     # 日付を整形
                     formatted_dates = []
                     for date_str in sorted(auto_added_dates):
