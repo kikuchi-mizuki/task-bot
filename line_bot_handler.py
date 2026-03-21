@@ -361,8 +361,11 @@ class LineBotHandler:
             
             # タスクタイプに基づいて処理
             task_type = ai_result.get('task_type', 'add_event')
-            
-            if task_type == 'availability_check':
+
+            if task_type == 'show_schedule':
+                print(f"[DEBUG] show_schedule: {ai_result.get('dates', [])}")
+                return self._handle_show_schedule(ai_result.get('dates', []), line_user_id)
+            elif task_type == 'availability_check':
                 print(f"[DEBUG] dates_info: {ai_result.get('dates', [])}")
                 return self._handle_availability_check(ai_result.get('dates', []), line_user_id)
             elif task_type == 'add_event':
@@ -945,7 +948,98 @@ class LineBotHandler:
         except Exception as e:
             print(f"[DEBUG] 複数予定処理エラー: {e}")
             return TextSendMessage(text=f"予定の処理中にエラーが発生しました: {str(e)}")
-    
+
+    def _handle_show_schedule(self, dates_info, line_user_id):
+        """予定表示を処理します"""
+        try:
+            print(f"[DEBUG] _handle_show_schedule開始")
+            print(f"[DEBUG] dates_info: {dates_info}")
+
+            # ユーザーの認証状態をチェック
+            if not self._check_user_auth(line_user_id):
+                print(f"[DEBUG] ユーザー認証未完了")
+                return self._send_auth_guide(line_user_id)
+
+            if not self.calendar_service:
+                print(f"[DEBUG] カレンダーサービス未初期化")
+                return TextSendMessage(text="Google Calendarサービスが初期化されていません。")
+
+            if not dates_info:
+                print(f"[DEBUG] dates_infoが空")
+                return TextSendMessage(text="日付を正しく認識できませんでした。")
+
+            # 日付ごとに予定を取得
+            from dateutil import parser
+            import pytz
+            jst = pytz.timezone('Asia/Tokyo')
+
+            all_events = []
+            for date_info in dates_info:
+                date_str = date_info.get('date')
+                if not date_str:
+                    continue
+
+                # その日の開始時刻と終了時刻
+                start_datetime = jst.localize(datetime.strptime(f"{date_str} 00:00", "%Y-%m-%d %H:%M"))
+                end_datetime = jst.localize(datetime.strptime(f"{date_str} 23:59", "%Y-%m-%d %H:%M"))
+
+                # 予定を取得
+                events = self.calendar_service.get_events_for_time_range(start_datetime, end_datetime, line_user_id)
+
+                # 日付情報を追加
+                for event in events:
+                    event['date'] = date_str
+                    all_events.append(event)
+
+            # 予定をフォーマット
+            if not all_events:
+                return TextSendMessage(text="予定はありません。")
+
+            # 日付ごとにグループ化
+            from collections import defaultdict
+            events_by_date = defaultdict(list)
+            for event in all_events:
+                events_by_date[event['date']].append(event)
+
+            # レスポンステキストを構築
+            response_text = "📅 予定一覧\n\n"
+
+            for date_str in sorted(events_by_date.keys()):
+                dt = parser.parse(date_str)
+                weekday = "月火水木金土日"[dt.weekday()]
+                response_text += f"【{dt.month}/{dt.day}（{weekday}）】\n"
+
+                # その日の予定を時刻順にソート
+                day_events = events_by_date[date_str]
+                day_events.sort(key=lambda e: e.get('start', ''))
+
+                for event in day_events:
+                    title = event.get('title', '予定')
+                    start_time = event.get('start', '')
+                    end_time = event.get('end', '')
+
+                    # 時刻をフォーマット
+                    if 'T' in start_time:
+                        start_dt = parser.parse(start_time)
+                        end_dt = parser.parse(end_time)
+                        start_dt = start_dt.astimezone(jst)
+                        end_dt = end_dt.astimezone(jst)
+                        time_str = f"{start_dt.strftime('%H:%M')}〜{end_dt.strftime('%H:%M')}"
+                    else:
+                        time_str = f"{start_time}〜{end_time}"
+
+                    response_text += f"• {title}\n  {time_str}\n"
+
+                response_text += "\n"
+
+            return TextSendMessage(text=response_text.strip())
+
+        except Exception as e:
+            print(f"[DEBUG] _handle_show_scheduleで例外発生: {e}")
+            import traceback
+            traceback.print_exc()
+            return TextSendMessage(text=f"予定表示でエラーが発生しました: {str(e)}")
+
     def _handle_availability_check(self, dates_info, line_user_id):
         """空き時間確認を処理します"""
         try:

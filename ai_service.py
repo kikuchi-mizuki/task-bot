@@ -51,7 +51,7 @@ class AIService:
                 "   - 例：「来月の空き時間」→ 来月1日〜来月末日の全日\n"
                 "5. 月が指定されていない場合（例：16日、17日）は今月として認識\n"
                 "6. 時間表現（午前9時、14時30分、9-10時、9時-10時、9:00-10:00など）を24時間形式に変換\n"
-                "7. **タスクの種類を判定（最重要）**:\n   - 日時のみ（タイトルや内容がない）場合は必ず「availability_check」（空き時間確認）\n   - 日時+タイトル/予定内容がある場合は「add_event」（予定追加）\n   - 例：「7/8 18時以降」→ availability_check（日時のみ）\n   - 例：「7/10 18:00〜20:00」→ availability_check（日時のみ）\n   - 例：「・7/10 9-10時\n・7/11 9-10時」→ availability_check（日時のみ複数）\n   - 例：「7/10 9-10時」→ availability_check（9:00〜10:00として抽出）\n   - 例：「7/10 9時-10時」→ availability_check（9:00〜10:00として抽出）\n   - 例：「7/10 9:00-10:00」→ availability_check（9:00〜10:00として抽出）\n   - 例：「7月18日 11:00-14:00,15:00-17:00」→ availability_check（日時のみ複数）\n   - 例：「7月20日 13:00-0:00」→ availability_check（日時のみ）\n   - 例：「明日の午前9時から会議を追加して」→ add_event（日時+予定内容）\n   - 例：「来週月曜日の14時から打ち合わせ」→ add_event（日時+予定内容）\n   - 例：「田中さんとMTG」→ add_event（予定内容あり）\n   - 例：「会議を追加」→ add_event（予定内容あり）\n"
+                "7. **タスクの種類を判定（最重要）**:\n   - 予定の表示・確認を求めている場合は「show_schedule」（予定表示）\n   - 空き時間を聞いている場合は「availability_check」（空き時間確認）\n   - 日時+タイトル/予定内容がある場合は「add_event」（予定追加）\n   \n   **予定表示（show_schedule）のキーワード:**\n   - 「予定教えて」「予定は？」「予定を教えて」\n   - 「スケジュール教えて」「スケジュールは？」\n   - 「何がある」「何がありますか」\n   - 「予定ある？」「予定確認」「予定見せて」\n   - 例：「明日の予定教えて」→ show_schedule\n   - 例：「来週のスケジュール教えて」→ show_schedule\n   - 例：「3/22の予定は？」→ show_schedule\n   \n   **空き時間確認（availability_check）のキーワード:**\n   - 「空き時間」「空いてる」「空き」「フリー」\n   - 日時のみ（タイトルや内容がなく、予定確認のキーワードもない）\n   - 例：「7/8 18時以降」→ availability_check（日時のみ）\n   - 例：「7/10 18:00〜20:00」→ availability_check（日時のみ）\n   - 例：「明日の空き時間」→ availability_check\n   - 例：「来週空いてる時間」→ availability_check\n   \n   **予定追加（add_event）:**\n   - 日時+タイトル/予定内容がある場合\n   - 「追加」「登録」などのキーワードがある場合\n   - 例：「明日の午前9時から会議を追加して」→ add_event（日時+予定内容）\n   - 例：「来週月曜日の14時から打ち合わせ」→ add_event（日時+予定内容）\n   - 例：「田中さんとMTG」→ add_event（予定内容あり）\n   - 例：「会議を追加」→ add_event（予定内容あり）\n"
                 "8. 自然言語の時間表現は必ず具体的な時刻範囲・日付範囲に変換してください。\n"
                 "   例：'18時以降'→'18:00〜23:59'、'終日'→'00:00〜23:59'、'今日'→'現在時刻〜23:59'、'今日から1週間'→'今日〜7日後の23:59'。\n"
                 "   終了時間が指定されていない場合は1時間の予定として認識してください（例：'10時'→'10:00〜11:00'）。\n"
@@ -70,6 +70,10 @@ class AIService:
                 "18. **日時のみの入力の場合は必ずavailability_checkとして判定してください。予定の内容や目的が明確に示されていない場合は空き時間確認として扱ってください。**\n"
                 "\n"
                 "【出力例】\n"
+                "予定表示の場合:\n"
+                "入力例：「明日の予定教えて」「3/22のスケジュールは？」\n"
+                "{\n  \"task_type\": \"show_schedule\",\n  \"dates\": [\n    {\n      \"date\": \"2026-03-22\"\n    }\n  ]\n}\n"
+                "\n"
                 "空き時間確認の場合:\n"
                 "{\n  \"task_type\": \"availability_check\",\n  \"dates\": [\n    {\n      \"date\": \"2025-07-08\",\n      \"time\": \"18:00\",\n      \"end_time\": \"23:59\"\n    }\n  ]\n}\n"
                 "\n"
@@ -100,20 +104,10 @@ class AIService:
             result = response.choices[0].message.content
             logger.info(f"[DEBUG] AI生レスポンス: {result}")
             parsed = self._parse_ai_response(result)
-            
-            # AIの判定結果を強制的に修正
-            if parsed and isinstance(parsed, dict) and 'dates' in parsed:
-                # 日時のみの場合は強制的にavailability_checkに変更
-                has_title_or_description = False
-                for date_info in parsed.get('dates', []):
-                    if date_info.get('title') or date_info.get('description'):
-                        has_title_or_description = True
-                        break
-                
-                if not has_title_or_description:
-                    logger.info(f"[DEBUG] 日時のみのため、task_typeをavailability_checkに強制変更")
-                    parsed['task_type'] = 'availability_check'
-            
+
+            # AIの判定を尊重（show_scheduleやavailability_checkはAIが判断）
+            logger.info(f"[DEBUG] AIが判定したtask_type: {parsed.get('task_type')}")
+
             return self._supplement_times(parsed, text)
             
         except Exception as e:
