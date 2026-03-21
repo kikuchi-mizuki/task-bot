@@ -43,9 +43,9 @@ class AIService:
                 "日付・時刻の解釈:\n"
                 "- 「明日」「来週」などの自然言語を日付に変換\n"
                 "- 「来週」は月曜から日曜の7日間\n"
-                "- 「18時以降」は18:00〜23:59\n"
+                "- 「X時以降」は必ずX:00〜23:59（例：「13時以降」→13:00〜23:59、「18時以降」→18:00〜23:59）\n"
                 "- 「午前中」は08:00〜12:00\n"
-                "- 「午後」は13:00〜18:00\n"
+                "- 「午後」は12:00〜18:00（※「午後」のみで「以降」がない場合）\n"
                 "- 複数日に時刻条件がある場合、各日に同じ時刻を適用\n"
                 "- 「4/1.2.3」のようなドット区切りは各日付として認識\n\n"
                 "【必須】出力JSON形式（datesは必ず配列で返す）:\n"
@@ -215,12 +215,16 @@ class AIService:
             if range_match:
                 d['time'] = f"{int(range_match.group(1)):02d}:00"
                 d['end_time'] = f"{int(range_match.group(2)):02d}:00"
-            # 18時以降
-            if (not d.get('time') or not d.get('end_time')) and re.search(r'(\d{1,2})時以降', phrase):
-                m = re.search(r'(\d{1,2})時以降', phrase)
-                if m:
-                    d['time'] = f"{int(m.group(1)):02d}:00"
-                    d['end_time'] = '23:59'
+            # X時以降（元のテキストまたはdescriptionに含まれる場合、強制的に23:59に設定）
+            time_after_match = re.search(r'(\d{1,2})時以降', original_text) or re.search(r'(\d{1,2})時以降', phrase)
+            if time_after_match:
+                hour = int(time_after_match.group(1))
+                # timeが未設定の場合は設定
+                if not d.get('time'):
+                    d['time'] = f"{hour:02d}:00"
+                # end_timeは常に23:59に強制設定（AIが誤って18:00などに設定していても上書き）
+                d['end_time'] = '23:59'
+                print(f"[DEBUG] X時以降を検出し強制設定: {hour}時以降 -> time={d['time']}, end_time={d['end_time']}")
             # 終日
             if (not d.get('time') and not d.get('end_time')) or re.search(r'終日', phrase):
                 d['time'] = '00:00'
@@ -324,13 +328,15 @@ class AIService:
             # AIが既に来週を展開済みの場合は、時刻だけ補完
             elif re.search(r'来週', phrase) and ai_already_expanded_next_week:
                 print(f"[DEBUG] AI既展開の来週エントリ、時刻のみ補完")
-                # 「X時以降」のパターンをチェック
+                # 「X時以降」のパターンをチェック（end_timeは常に23:59に強制設定）
                 time_after_match = re.search(r'(\d{1,2})時以降', original_text)
-                if time_after_match and (not d.get('time') or not d.get('end_time')):
+                if time_after_match:
                     hour = int(time_after_match.group(1))
-                    d['time'] = f"{hour:02d}:00"
+                    if not d.get('time'):
+                        d['time'] = f"{hour:02d}:00"
+                    # end_timeは常に23:59に強制設定
                     d['end_time'] = '23:59'
-                    print(f"[DEBUG] X時以降を補完: {hour}時以降 -> {d['time']}〜{d['end_time']}")
+                    print(f"[DEBUG] X時以降を補完（強制）: {hour}時以降 -> {d['time']}〜{d['end_time']}")
             # 来月
             if re.search(r'来月', phrase):
                 # 来月の1日を計算
