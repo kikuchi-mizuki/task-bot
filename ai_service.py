@@ -585,9 +585,9 @@ class AIService:
         
         print(f"[DEBUG] new_dates(正規表現追加後): {new_dates}")
         
-        # 移動時間の自動追加処理
-        new_dates = self._add_travel_time(new_dates, original_text)
-        
+        # 移動時間の自動追加処理（無効化 - line_bot_handler.pyで処理）
+        # new_dates = self._add_travel_time(new_dates, original_text)
+
         parsed['dates'] = new_dates
         return parsed
     
