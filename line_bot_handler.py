@@ -417,7 +417,13 @@ class LineBotHandler:
             expanded_dates = []
             global_travel_time_hours = travel_time_hours
 
-            for date_info in dates:
+            for i, date_info in enumerate(dates):
+                print(f"[DEBUG] _handle_multiple_events: date_info[{i}]のタイプ={type(date_info)}, 値={date_info}")
+
+                # 文字列や辞書以外の場合はスキップ
+                if not isinstance(date_info, dict):
+                    print(f"[WARNING] date_info[{i}]が辞書でないためスキップ: タイプ={type(date_info)}")
+                    continue
                 # 個別の移動時間が指定されている場合はそれを優先、なければ全体の設定を使用
                 item_travel_time_hours = date_info.get('travel_time_hours', global_travel_time_hours)
                 if item_travel_time_hours:
@@ -484,6 +490,11 @@ class LineBotHandler:
 
             events_by_date = defaultdict(list)
             for date_info in dates:
+                # 辞書でない場合はスキップ
+                if not isinstance(date_info, dict):
+                    print(f"[WARNING] events_by_date処理: date_infoが辞書でないためスキップ: {type(date_info)}")
+                    continue
+
                 date_str = date_info.get('date')
                 if date_str:
                     events_by_date[date_str].append(date_info)
@@ -500,6 +511,11 @@ class LineBotHandler:
                     max_time = "00:00"
 
                     for event_info in date_events:
+                        # 辞書でない場合はスキップ
+                        if not isinstance(event_info, dict):
+                            print(f"[WARNING] event_infoが辞書でないためスキップ: {type(event_info)}")
+                            continue
+
                         time_str = event_info.get('time', '00:00')
                         end_time_str = event_info.get('end_time')
 
@@ -829,6 +845,11 @@ class LineBotHandler:
             # 予定追加処理（古いロジック - 実質的には使われない）
             for date_info in dates:
                 try:
+                    # 辞書でない場合はスキップ
+                    if not isinstance(date_info, dict):
+                        print(f"[WARNING] 古いロジック: date_infoが辞書でないためスキップ: {type(date_info)}")
+                        continue
+
                     # 日時を構築
                     date_str = date_info.get('date')
                     time_str = date_info.get('time')
@@ -992,9 +1013,22 @@ class LineBotHandler:
             jst = pytz.timezone('Asia/Tokyo')
 
             all_events = []
-            for date_info in dates_info:
+            for i, date_info in enumerate(dates_info):
+                print(f"[DEBUG] date_info[{i}]のタイプ: {type(date_info)}, 値: {date_info}")
+
+                # 文字列の場合はスキップ
+                if isinstance(date_info, str):
+                    print(f"[WARNING] date_info[{i}]が文字列のためスキップ: {date_info}")
+                    continue
+
+                # 辞書でない場合もスキップ
+                if not isinstance(date_info, dict):
+                    print(f"[WARNING] date_info[{i}]が辞書でないためスキップ: {type(date_info)}")
+                    continue
+
                 date_str = date_info.get('date')
                 if not date_str:
+                    print(f"[WARNING] date_info[{i}]にdateキーがない")
                     continue
 
                 # その日の開始時刻と終了時刻
@@ -1085,11 +1119,22 @@ class LineBotHandler:
             print(f"[DEBUG] 空き時間計算開始")
             free_slots_by_frame = []
             for i, date_info in enumerate(dates_info):
-                print(f"[DEBUG] 日付{i+1}処理開始: {date_info}")
+                print(f"[DEBUG] 日付{i+1}処理開始: タイプ={type(date_info)}, 値={date_info}")
+
+                # 文字列の場合はスキップ
+                if isinstance(date_info, str):
+                    print(f"[WARNING] date_info[{i}]が文字列のためスキップ: {date_info}")
+                    continue
+
+                # 辞書でない場合もスキップ
+                if not isinstance(date_info, dict):
+                    print(f"[WARNING] date_info[{i}]が辞書でないためスキップ: {type(date_info)}")
+                    continue
+
                 date_str = date_info.get('date')
                 start_time = date_info.get('time')
                 end_time = date_info.get('end_time')
-                
+
                 print(f"[DEBUG] 日付{i+1}の抽出値: date={date_str}, start_time={start_time}, end_time={end_time}")
                 
                 if date_str and start_time and end_time:

@@ -86,7 +86,12 @@ class AIService:
             parsed = self._parse_ai_response(result)
 
             # AIの判定を尊重
+            logger.info(f"[DEBUG] パース後のJSON: {parsed}")
             logger.info(f"[DEBUG] AIが判定したtask_type: {parsed.get('task_type')}")
+            if 'dates' in parsed:
+                logger.info(f"[DEBUG] datesの内容: {parsed['dates']}")
+                for i, d in enumerate(parsed.get('dates', [])):
+                    logger.info(f"[DEBUG] dates[{i}]: タイプ={type(d)}, 値={d}")
 
             # _supplement_times関数を呼び出して日時の補完処理を実施
             try:
@@ -136,6 +141,21 @@ class AIService:
         if 'dates' not in parsed or not isinstance(parsed.get('dates'), list):
             print(f"[DEBUG] datesが存在しないか無効: {parsed}")
             return parsed
+
+        # dates配列の各要素が辞書であることを検証
+        valid_dates = []
+        for i, d in enumerate(parsed['dates']):
+            if isinstance(d, dict):
+                valid_dates.append(d)
+            else:
+                print(f"[WARNING] dates[{i}]が辞書でないためスキップ: タイプ={type(d)}, 値={d}")
+
+        if not valid_dates:
+            print(f"[DEBUG] 有効なdatesエントリが存在しない")
+            return parsed
+
+        # 有効な辞書のみを使用
+        parsed['dates'] = valid_dates
         allday_dates = set()
         new_dates = []
 
