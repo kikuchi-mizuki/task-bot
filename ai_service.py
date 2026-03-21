@@ -35,7 +35,7 @@ class AIService:
             now_jst = self._get_jst_now_str()
             system_prompt = (
                 f"あなたはスケジュール管理アシスタントです。現在は {now_jst} です。\n\n"
-                "ユーザーのメッセージを理解し、以下のJSON形式で返してください。\n\n"
+                "【重要】ユーザーのメッセージを理解し、必ず以下のJSON形式のみで返してください。説明文は不要です。\n\n"
                 "タスクタイプ:\n"
                 "- show_schedule: 予定の表示・確認\n"
                 "- availability_check: 空き時間確認\n"
@@ -43,13 +43,17 @@ class AIService:
                 "日付・時刻の解釈:\n"
                 "- 「明日」「来週」などの自然言語を日付に変換\n"
                 "- 「来週」は月曜から日曜の7日間\n"
-                "- 「18時以降」は18:00〜22:00\n"
+                "- 「18時以降」は18:00〜23:59\n"
                 "- 「午前中」は08:00〜12:00\n"
                 "- 「午後」は13:00〜18:00\n"
                 "- 複数日に時刻条件がある場合、各日に同じ時刻を適用\n"
                 "- 「4/1.2.3」のようなドット区切りは各日付として認識\n\n"
                 "出力JSON形式:\n"
-                '{\n  "task_type": "availability_check",\n  "dates": [{"date": "2026-03-24", "time": "18:00", "end_time": "22:00"}]\n}\n\n'
+                '{\n  "task_type": "availability_check",\n  "dates": [{"date": "2026-03-24", "time": "18:00", "end_time": "23:59"}]\n}\n\n'
+                "具体例:\n"
+                "・「明日の空き時間」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-22\", \"time\": \"08:00\", \"end_time\": \"22:00\"}]}\n"
+                "・\"来週18:00以降\"→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-24\", \"time\": \"18:00\", \"end_time\": \"23:59\", \"description\": \"来週\"}]}\n"
+                "・「明日9時から会議」→ {\"task_type\": \"add_event\", \"dates\": [{\"date\": \"2026-03-22\", \"time\": \"09:00\", \"end_time\": \"10:00\", \"title\": \"会議\"}]}\n\n"
                 "移動時間:\n"
                 '「移動時間1時間」がある場合は "travel_time_hours": 1.0 を追加\n\n'
                 "会話の文脈を考慮してください。"
@@ -84,9 +88,23 @@ class AIService:
             # AIの判定を尊重
             logger.info(f"[DEBUG] AIが判定したtask_type: {parsed.get('task_type')}")
 
+            # _supplement_times関数を呼び出して日時の補完処理を実施
+            try:
+                parsed = self._supplement_times(parsed, text)
+                logger.info(f"[DEBUG] _supplement_times処理後: {parsed}")
+            except Exception as supplement_error:
+                logger.error(f"[ERROR] _supplement_times処理エラー: {supplement_error}")
+                import traceback
+                traceback.print_exc()
+                # エラーが発生しても、AIの解析結果をそのまま返す
+                logger.warning(f"[WARNING] _supplement_timesエラーのため、AI解析結果をそのまま使用")
+
             return parsed
-            
+
         except Exception as e:
+            logger.error(f"[ERROR] extract_dates_and_times全体エラー: {e}")
+            import traceback
+            traceback.print_exc()
             return {"error": "イベント情報を正しく認識できませんでした。\n\n・日時を打つと空き時間を返します\n・予定を打つとカレンダーに追加します\n\n例：\n『明日の午前9時から会議を追加して』\n『来週月曜日の14時から打ち合わせ』"}
     
     def _parse_ai_response(self, response):
@@ -109,11 +127,40 @@ class AIService:
         logger = logging.getLogger("ai_service")
         print(f"[DEBUG] _supplement_times開始: parsed={parsed}")
         print(f"[DEBUG] 元テキスト: {original_text}")
-        if not parsed or 'dates' not in parsed:
-            print(f"[DEBUG] datesが存在しない: {parsed}")
+
+        # parsedの検証
+        if not parsed or not isinstance(parsed, dict):
+            print(f"[DEBUG] parsedが無効: {parsed}")
+            return parsed
+
+        if 'dates' not in parsed or not isinstance(parsed.get('dates'), list):
+            print(f"[DEBUG] datesが存在しないか無効: {parsed}")
             return parsed
         allday_dates = set()
         new_dates = []
+
+        # 「来週」が元のテキストに含まれているかチェック
+        has_next_week = re.search(r'来週', original_text) is not None
+        if has_next_week:
+            # 来週の月曜日を計算
+            days_until_next_monday = (7 - now.weekday()) % 7
+            if days_until_next_monday == 0:  # 今日が月曜日の場合
+                days_until_next_monday = 7
+            next_monday = now + timedelta(days=days_until_next_monday)
+            next_sunday = next_monday + timedelta(days=6)
+
+            # AI応答に既に来週の範囲の日付が複数含まれているかチェック
+            dates_in_next_week = [
+                d for d in parsed['dates']
+                if d.get('date') and next_monday.strftime('%Y-%m-%d') <= d.get('date') <= next_sunday.strftime('%Y-%m-%d')
+            ]
+
+            # 既に5日以上あれば、AIが来週を展開済みと判断
+            ai_already_expanded_next_week = len(dates_in_next_week) >= 5
+            print(f"[DEBUG] 来週検出: AI既展開={ai_already_expanded_next_week}, 該当日数={len(dates_in_next_week)}")
+        else:
+            ai_already_expanded_next_week = False
+
         # 1. AI抽出を最優先。time, end_timeが空欄のものだけ補完
         for d in parsed['dates']:
             print(f"[DEBUG] datesループ: {d}")
@@ -186,33 +233,64 @@ class AIService:
                     end_time_obj = time_obj + timedelta(hours=1)
                     d['end_time'] = end_time_obj.strftime('%H:%M')
                     print(f"[DEBUG] 本日の終了時間を1時間後に強制設定: {d.get('time')} -> {d['end_time']}")
-            # 来週
-            if re.search(r'来週', phrase):
+            # 来週（AIが既に展開済みの場合はスキップ）
+            if re.search(r'来週', phrase) and not ai_already_expanded_next_week:
                 # 来週の月曜日を計算
                 days_until_next_monday = (7 - now.weekday()) % 7
                 if days_until_next_monday == 0:  # 今日が月曜日の場合
                     days_until_next_monday = 7
                 next_monday = now + timedelta(days=days_until_next_monday)
-                
+
+                # 元のテキストから時刻条件を抽出
+                default_start_time = '08:00'
+                default_end_time = '22:00'
+
+                # 「X時以降」のパターンをチェック
+                time_after_match = re.search(r'(\d{1,2})時以降', original_text)
+                if time_after_match:
+                    hour = int(time_after_match.group(1))
+                    default_start_time = f"{hour:02d}:00"
+                    default_end_time = '23:59'
+                    print(f"[DEBUG] 来週 + X時以降を検出: {hour}時以降 -> {default_start_time}〜{default_end_time}")
+
+                # 「X時-Y時」のパターンをチェック
+                time_range_match = re.search(r'(\d{1,2})[\-〜~](\d{1,2})時', original_text)
+                if time_range_match:
+                    start_hour = int(time_range_match.group(1))
+                    end_hour = int(time_range_match.group(2))
+                    default_start_time = f"{start_hour:02d}:00"
+                    default_end_time = f"{end_hour:02d}:00"
+                    print(f"[DEBUG] 来週 + 時間範囲を検出: {start_hour}-{end_hour}時 -> {default_start_time}〜{default_end_time}")
+
                 # 来週の7日間を生成
                 week_dates = []
                 for i in range(7):
                     week_date = next_monday + timedelta(days=i)
                     week_dates.append(week_date.strftime('%Y-%m-%d'))
-                
+
                 # 来週の各日付に対して空き時間確認のエントリを作成
                 for week_date in week_dates:
                     week_entry = {
                         'date': week_date,
-                        'time': '08:00',
-                        'end_time': '22:00'
+                        'time': default_start_time,
+                        'end_time': default_end_time
                     }
                     if not any(existing.get('date') == week_date for existing in new_dates):
                         new_dates.append(week_entry)
-                        print(f"[DEBUG] 来週の日付を追加: {week_date}")
-                
+                        print(f"[DEBUG] 来週の日付を追加: {week_date} {default_start_time}〜{default_end_time}")
+
                 # 元のエントリは削除（来週の処理で置き換え）
                 continue
+            # AIが既に来週を展開済みの場合は、時刻だけ補完
+            elif re.search(r'来週', phrase) and ai_already_expanded_next_week:
+                print(f"[DEBUG] AI既展開の来週エントリ、時刻のみ補完")
+                # 「X時以降」のパターンをチェック
+                time_after_match = re.search(r'(\d{1,2})時以降', original_text)
+                if time_after_match and (not d.get('time') or not d.get('end_time')):
+                    hour = int(time_after_match.group(1))
+                    d['time'] = f"{hour:02d}:00"
+                    d['end_time'] = '23:59'
+                    print(f"[DEBUG] X時以降を補完: {hour}時以降 -> {d['time']}〜{d['end_time']}")
             # 来月
             if re.search(r'来月', phrase):
                 # 来月の1日を計算
