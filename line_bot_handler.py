@@ -495,13 +495,16 @@ class LineBotHandler:
                     traceback.print_exc()
                     continue
 
-            # 重複していない予定を自動的に追加
+            # 重複していない予定を自動的に追加（Batch API使用）
             auto_added_count = 0
             auto_added_dates = []
             if non_conflicting_events:
                 total_events = len(non_conflicting_events)
-                print(f"[DEBUG] 重複のない予定を自動追加: {total_events}件")
-                for idx, event_info in enumerate(non_conflicting_events, 1):
+                print(f"[DEBUG] 重複のない予定をBatch APIで一括追加: {total_events}件")
+
+                # Batch API用にイベントデータを準備
+                batch_events = []
+                for event_info in non_conflicting_events:
                     try:
                         date_str = event_info.get('date')
                         time_str = event_info.get('time')
@@ -525,27 +528,34 @@ class LineBotHandler:
                         if end_datetime.tzinfo is None:
                             end_datetime = self.jst.localize(end_datetime)
 
-                        # 予定を追加
-                        success, message, result = self.calendar_service.add_event(
-                            title,
-                            start_datetime,
-                            end_datetime,
-                            description,
-                            line_user_id=line_user_id,
-                            force_add=True
-                        )
-
-                        if success:
-                            auto_added_count += 1
-                            if date_str not in auto_added_dates:
-                                auto_added_dates.append(date_str)
-                            print(f"[DEBUG] 予定追加成功 ({idx}/{total_events}): {date_str} {title}")
-                        else:
-                            print(f"[DEBUG] 予定追加失敗 ({idx}/{total_events}): {date_str} {title} - {message}")
+                        batch_events.append({
+                            'title': title,
+                            'start_datetime': start_datetime,
+                            'end_datetime': end_datetime,
+                            'description': description,
+                            'date_str': date_str  # 日付を記録
+                        })
 
                     except Exception as e:
-                        print(f"[DEBUG] 予定自動追加エラー: {e}")
+                        print(f"[DEBUG] イベントデータ準備エラー: {e}")
                         continue
+
+                # Batch APIで一括追加
+                if batch_events:
+                    success_count, failed_count, results = self.calendar_service.add_events_batch(
+                        batch_events,
+                        line_user_id=line_user_id
+                    )
+
+                    auto_added_count = success_count
+
+                    # 追加された日付を集計
+                    for event_data in batch_events[:success_count]:
+                        date_str = event_data['date_str']
+                        if date_str not in auto_added_dates:
+                            auto_added_dates.append(date_str)
+
+                    print(f"[DEBUG] Batch API結果: 成功={success_count}件, 失敗={failed_count}件")
 
             # 重複が見つかった場合は日付ごとに確認メッセージを表示
             if conflicting_dates:

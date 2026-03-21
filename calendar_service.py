@@ -242,7 +242,90 @@ class GoogleCalendarService:
         except Exception as e:
             logger.error(f"[ERROR] add_eventで例外発生: {e}")
             return False, f"エラーが発生しました: {str(e)}", None
-    
+
+    def add_events_batch(self, events_data, line_user_id=None):
+        """複数のイベントを一度に追加します（Batch API使用）
+
+        Args:
+            events_data: イベント情報のリスト [{'title': str, 'start_datetime': datetime, 'end_datetime': datetime, 'description': str}, ...]
+            line_user_id: LINEユーザーID（認証トークン取得用）
+
+        Returns:
+            (成功件数, 失敗件数, 詳細結果)
+        """
+        from googleapiclient.http import BatchHttpRequest
+
+        try:
+            # サービスを取得
+            service = self._get_calendar_service(line_user_id)
+            if not service:
+                logger.error("[ERROR] カレンダーサービスの取得に失敗")
+                return 0, len(events_data), []
+
+            # バッチリクエストを作成
+            batch = service.new_batch_http_request()
+
+            results = {
+                'success': [],
+                'failed': []
+            }
+
+            def callback(request_id, response, exception):
+                """バッチリクエストのコールバック"""
+                if exception is not None:
+                    logger.error(f"[ERROR] Batch request {request_id} failed: {exception}")
+                    results['failed'].append({
+                        'request_id': request_id,
+                        'error': str(exception)
+                    })
+                else:
+                    logger.info(f"[DEBUG] Batch request {request_id} success: {response.get('summary', 'No title')}")
+                    results['success'].append({
+                        'request_id': request_id,
+                        'event': response
+                    })
+
+            # バッチにリクエストを追加
+            for idx, event_data in enumerate(events_data):
+                event = {
+                    'summary': event_data['title'],
+                    'description': event_data.get('description', ''),
+                    'start': {
+                        'dateTime': event_data['start_datetime'].isoformat(),
+                        'timeZone': 'Asia/Tokyo',
+                    },
+                    'end': {
+                        'dateTime': event_data['end_datetime'].isoformat(),
+                        'timeZone': 'Asia/Tokyo',
+                    },
+                }
+
+                batch.add(
+                    service.events().insert(
+                        calendarId=Config.GOOGLE_CALENDAR_ID,
+                        body=event
+                    ),
+                    callback=callback,
+                    request_id=str(idx)
+                )
+
+            logger.info(f"[DEBUG] Batch API実行開始: {len(events_data)}件のイベントを追加")
+            # バッチリクエストを実行
+            batch.execute()
+
+            success_count = len(results['success'])
+            failed_count = len(results['failed'])
+
+            logger.info(f"[DEBUG] Batch API実行完了: 成功={success_count}件, 失敗={failed_count}件")
+
+            return success_count, failed_count, results
+
+        except Exception as e:
+            logger.error(f"[ERROR] add_events_batchで例外発生: {e}")
+            import traceback
+            traceback.print_exc()
+            return 0, len(events_data), {'error': str(e)}
+
     def get_events_for_dates(self, dates, line_user_id=None):
         """指定された日付のイベントを取得します（ユーザーごとの認証トークン対応、JST日付で正確に抽出）"""
         import pytz
