@@ -376,31 +376,46 @@ class LineBotHandler:
             # 展開後の予定リストを使用
             dates = expanded_dates if expanded_dates else dates
 
-            # 最初に全ての予定の重複チェックを実施
-            all_conflicts = []
+            # 効率化: 日付ごとにグループ化して重複チェック
+            from collections import defaultdict
+            from datetime import datetime, timedelta
+
+            events_by_date = defaultdict(list)
             for date_info in dates:
+                date_str = date_info.get('date')
+                if date_str:
+                    events_by_date[date_str].append(date_info)
+
+            # 日付ごとにカレンダーイベントを取得（1日1回のAPIコール）
+            all_conflicts = []
+            existing_events_cache = {}
+
+            for date_str, date_events in events_by_date.items():
                 try:
-                    # 日時を構築
-                    date_str = date_info.get('date')
-                    time_str = date_info.get('time')
-                    end_time_str = date_info.get('end_time')
-                    title = date_info.get('title', '予定')
+                    # その日の最小開始時刻と最大終了時刻を計算
+                    min_time = "23:59"
+                    max_time = "00:00"
 
-                    if not date_str or not time_str:
-                        continue
+                    for event_info in date_events:
+                        time_str = event_info.get('time', '00:00')
+                        end_time_str = event_info.get('end_time')
 
-                    # 終了時間が設定されていない場合は1時間後に設定
-                    if not end_time_str or end_time_str == time_str:
-                        from datetime import datetime, timedelta
-                        time_obj = datetime.strptime(time_str, "%H:%M")
-                        end_time_obj = time_obj + timedelta(hours=1)
-                        end_time_str = end_time_obj.strftime("%H:%M")
+                        # 終了時間が未設定の場合は1時間後
+                        if not end_time_str or end_time_str == time_str:
+                            time_obj = datetime.strptime(time_str, "%H:%M")
+                            end_time_obj = time_obj + timedelta(hours=1)
+                            end_time_str = end_time_obj.strftime("%H:%M")
+                            event_info['end_time'] = end_time_str
 
-                    # 日時文字列を構築
-                    start_datetime_str = f"{date_str}T{time_str}:00+09:00"
-                    end_datetime_str = f"{date_str}T{end_time_str}:00+09:00"
+                        if time_str < min_time:
+                            min_time = time_str
+                        if end_time_str > max_time:
+                            max_time = end_time_str
 
-                    # 日時をパース
+                    # その日の範囲で既存予定を1回取得
+                    start_datetime_str = f"{date_str}T{min_time}:00+09:00"
+                    end_datetime_str = f"{date_str}T{max_time}:00+09:00"
+
                     start_datetime = parser.parse(start_datetime_str)
                     end_datetime = parser.parse(end_datetime_str)
 
@@ -409,25 +424,53 @@ class LineBotHandler:
                     if end_datetime.tzinfo is None:
                         end_datetime = self.jst.localize(end_datetime)
 
-                    # 既存予定をチェック
-                    events = self.calendar_service.get_events_for_time_range(start_datetime, end_datetime, line_user_id)
-                    if events:
-                        for event in events:
-                            conflict_info = {
-                                'new_event_title': title,
-                                'new_event_time': f"{time_str}~{end_time_str}",
-                                'existing_title': event.get('title', '予定なし'),
-                                'existing_start': event.get('start', ''),
-                                'existing_end': event.get('end', '')
-                            }
-                            # 重複を避けるため、同じ重複がリストにない場合のみ追加
-                            if not any(c['existing_start'] == conflict_info['existing_start'] and
-                                      c['existing_end'] == conflict_info['existing_end'] and
-                                      c['existing_title'] == conflict_info['existing_title']
-                                      for c in all_conflicts):
-                                all_conflicts.append(conflict_info)
+                    # その日の既存予定を取得（キャッシュ）
+                    existing_events = self.calendar_service.get_events_for_time_range(start_datetime, end_datetime, line_user_id)
+                    existing_events_cache[date_str] = existing_events
+
+                    # 各予定に対して重複チェック（メモリ内で実施）
+                    for event_info in date_events:
+                        time_str = event_info.get('time')
+                        end_time_str = event_info.get('end_time')
+                        title = event_info.get('title', '予定')
+
+                        if not time_str or not end_time_str:
+                            continue
+
+                        # 時刻をパース
+                        event_start = parser.parse(f"{date_str}T{time_str}:00+09:00")
+                        event_end = parser.parse(f"{date_str}T{end_time_str}:00+09:00")
+
+                        if event_start.tzinfo is None:
+                            event_start = self.jst.localize(event_start)
+                        if event_end.tzinfo is None:
+                            event_end = self.jst.localize(event_end)
+
+                        # 既存予定との重複をチェック
+                        for existing in existing_events:
+                            existing_start = parser.parse(existing.get('start', ''))
+                            existing_end = parser.parse(existing.get('end', ''))
+
+                            # 重複判定：新予定の開始が既存の終了より前 AND 新予定の終了が既存の開始より後
+                            if event_start < existing_end and event_end > existing_start:
+                                conflict_info = {
+                                    'new_event_title': title,
+                                    'new_event_time': f"{time_str}~{end_time_str}",
+                                    'existing_title': existing.get('title', '予定なし'),
+                                    'existing_start': existing.get('start', ''),
+                                    'existing_end': existing.get('end', '')
+                                }
+                                # 重複を避ける
+                                if not any(c['existing_start'] == conflict_info['existing_start'] and
+                                          c['existing_end'] == conflict_info['existing_end'] and
+                                          c['existing_title'] == conflict_info['existing_title']
+                                          for c in all_conflicts):
+                                    all_conflicts.append(conflict_info)
+
                 except Exception as e:
-                    print(f"[DEBUG] 重複チェック中にエラー: {e}")
+                    print(f"[DEBUG] 日付 {date_str} の重複チェック中にエラー: {e}")
+                    import traceback
+                    traceback.print_exc()
                     continue
 
             # 重複が見つかった場合は確認メッセージを表示
