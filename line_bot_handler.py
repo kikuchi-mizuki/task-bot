@@ -480,14 +480,15 @@ class LineBotHandler:
                                         'end': existing.get('end', '')
                                     })
 
-                        # 重複がある日付の場合は、その日の全イベントを記録
-                        if date_has_conflict and date_str in conflicting_dates:
-                            if event_info not in conflicting_dates[date_str]['events']:
-                                conflicting_dates[date_str]['events'].append(event_info)
-
                     # この日に重複がない場合は、自動追加リストに追加
+                    # 重複がある場合は、その日のすべてのイベントを記録
                     if not date_has_conflict:
                         non_conflicting_events.extend(date_events)
+                    else:
+                        # この日に重複がある場合は、その日のすべてのイベントを記録
+                        # （移動時間付きの予定の場合、行き・メイン・帰りの3つをまとめて記録）
+                        if date_str in conflicting_dates:
+                            conflicting_dates[date_str]['events'] = date_events
 
                 except Exception as e:
                     print(f"[DEBUG] 日付 {date_str} の重複チェック中にエラー: {e}")
