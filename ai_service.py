@@ -48,12 +48,14 @@ class AIService:
                 "- 「午後」は13:00〜18:00\n"
                 "- 複数日に時刻条件がある場合、各日に同じ時刻を適用\n"
                 "- 「4/1.2.3」のようなドット区切りは各日付として認識\n\n"
-                "出力JSON形式:\n"
+                "【必須】出力JSON形式（datesは必ず配列で返す）:\n"
                 '{\n  "task_type": "availability_check",\n  "dates": [{"date": "2026-03-24", "time": "18:00", "end_time": "23:59"}]\n}\n\n'
-                "具体例:\n"
+                "具体例（必ずdatesキーを使用し、配列で返す）:\n"
+                "・「明日の予定教えて」→ {\"task_type\": \"show_schedule\", \"dates\": [{\"date\": \"2026-03-22\"}]}\n"
                 "・「明日の空き時間」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-22\", \"time\": \"08:00\", \"end_time\": \"22:00\"}]}\n"
                 "・\"来週18:00以降\"→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-24\", \"time\": \"18:00\", \"end_time\": \"23:59\", \"description\": \"来週\"}]}\n"
                 "・「明日9時から会議」→ {\"task_type\": \"add_event\", \"dates\": [{\"date\": \"2026-03-22\", \"time\": \"09:00\", \"end_time\": \"10:00\", \"title\": \"会議\"}]}\n\n"
+                "【注意】dateではなく、必ずdatesキーを使用してください。\n\n"
                 "移動時間:\n"
                 '「移動時間1時間」がある場合は "travel_time_hours": 1.0 を追加\n\n'
                 "会話の文脈を考慮してください。"
@@ -88,6 +90,14 @@ class AIService:
             # AIの判定を尊重
             logger.info(f"[DEBUG] パース後のJSON: {parsed}")
             logger.info(f"[DEBUG] AIが判定したtask_type: {parsed.get('task_type')}")
+
+            # 'date'キーがあり'dates'がない場合、'dates'配列に変換
+            if 'date' in parsed and 'dates' not in parsed:
+                date_value = parsed['date']
+                logger.warning(f"[WARNING] AIが'date'キーで返答。'dates'配列に変換します: {date_value}")
+                parsed['dates'] = [{'date': date_value}]
+                del parsed['date']  # 重複を避けるため削除
+
             if 'dates' in parsed:
                 logger.info(f"[DEBUG] datesの内容: {parsed['dates']}")
                 for i, d in enumerate(parsed.get('dates', [])):
