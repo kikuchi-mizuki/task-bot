@@ -832,25 +832,49 @@ class LineBotHandler:
 
             # 全て重複なしの場合は成功メッセージのみ
             if auto_added_count > 0:
-                # 1日分かつ1件の予定の場合は詳細を表示
-                if len(auto_added_dates) == 1 and len(batch_events) == 1:
-                    event_data = batch_events[0]
-                    title = event_data.get('title', '予定')
-                    start_datetime = event_data.get('start_datetime')
-                    end_datetime = event_data.get('end_datetime')
+                # 1日分の場合は詳細を表示（移動時間を含む場合も対応）
+                if len(auto_added_dates) == 1:
+                    # 移動時間以外の予定（メイン予定）を抽出
+                    main_events = [e for e in batch_events if '移動時間' not in e.get('title', '')]
 
-                    # 日時をフォーマット
-                    if start_datetime and end_datetime:
-                        import pytz
-                        jst = pytz.timezone('Asia/Tokyo')
-                        start_dt = start_datetime.astimezone(jst)
-                        end_dt = end_datetime.astimezone(jst)
-                        weekday = "月火水木金土日"[start_dt.weekday()]
+                    # メイン予定が1件の場合は詳細表示
+                    if len(main_events) == 1:
+                        event_data = main_events[0]
+                        title = event_data.get('title', '予定')
+                        start_datetime = event_data.get('start_datetime')
+                        end_datetime = event_data.get('end_datetime')
 
-                        response_text = "✅予定を追加しました！\n\n"
-                        response_text += f"📅{title}\n"
-                        response_text += f"{start_dt.month}/{start_dt.day}（{weekday}）{start_dt.strftime('%H:%M')}〜{end_dt.strftime('%H:%M')}"
-                        return TextSendMessage(text=response_text)
+                        # 日時をフォーマット
+                        if start_datetime and end_datetime:
+                            import pytz
+                            jst = pytz.timezone('Asia/Tokyo')
+                            start_dt = start_datetime.astimezone(jst)
+                            end_dt = end_datetime.astimezone(jst)
+                            weekday = "月火水木金土日"[start_dt.weekday()]
+
+                            # 移動時間を含む場合は、それも表示
+                            has_travel = len(batch_events) > len(main_events)
+                            if has_travel:
+                                response_text = "✅予定を追加しました！\n\n"
+                                response_text += f"{start_dt.month}/{start_dt.day}（{weekday}）\n"
+                                response_text += "────────\n"
+
+                                # 時間順にソート
+                                sorted_events = sorted(batch_events, key=lambda e: e['start_datetime'])
+                                for i, event in enumerate(sorted_events, 1):
+                                    evt_title = event.get('title', '予定')
+                                    evt_start = event['start_datetime'].astimezone(jst)
+                                    evt_end = event['end_datetime'].astimezone(jst)
+                                    response_text += f"{i}. {evt_title}\n"
+                                    response_text += f"🕐 {evt_start.strftime('%H:%M')}〜{evt_end.strftime('%H:%M')}\n"
+                                response_text += "────────"
+                            else:
+                                # 移動時間なしの通常表示
+                                response_text = "✅予定を追加しました！\n\n"
+                                response_text += f"📅{title}\n"
+                                response_text += f"{start_dt.month}/{start_dt.day}（{weekday}）{start_dt.strftime('%H:%M')}〜{end_dt.strftime('%H:%M')}"
+
+                            return TextSendMessage(text=response_text)
 
                 # 複数日分の場合は簡素な表示
                 formatted_dates = []
