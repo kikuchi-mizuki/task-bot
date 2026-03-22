@@ -617,6 +617,7 @@ class LineBotHandler:
             # 重複していない予定を自動的に追加（Batch API使用）
             auto_added_count = 0
             auto_added_dates = []
+            batch_events = []  # スコープを広げるため、ここで定義
 
             # 大量の予定（20件以上）の場合、バックグラウンド処理を使用
             use_background = False
@@ -630,7 +631,6 @@ class LineBotHandler:
                     print(f"[DEBUG] 大量予定検出: バックグラウンド処理を使用")
 
                 # Batch API用にイベントデータを準備
-                batch_events = []
                 for event_info in non_conflicting_events:
                     try:
                         date_str = event_info.get('date')
@@ -832,7 +832,27 @@ class LineBotHandler:
 
             # 全て重複なしの場合は成功メッセージのみ
             if auto_added_count > 0:
-                # 日付を整形
+                # 1日分かつ1件の予定の場合は詳細を表示
+                if len(auto_added_dates) == 1 and len(batch_events) == 1:
+                    event_data = batch_events[0]
+                    title = event_data.get('title', '予定')
+                    start_datetime = event_data.get('start_datetime')
+                    end_datetime = event_data.get('end_datetime')
+
+                    # 日時をフォーマット
+                    if start_datetime and end_datetime:
+                        import pytz
+                        jst = pytz.timezone('Asia/Tokyo')
+                        start_dt = start_datetime.astimezone(jst)
+                        end_dt = end_datetime.astimezone(jst)
+                        weekday = "月火水木金土日"[start_dt.weekday()]
+
+                        response_text = "✅予定を追加しました！\n\n"
+                        response_text += f"📅{title}\n"
+                        response_text += f"{start_dt.month}/{start_dt.day}（{weekday}）{start_dt.strftime('%H:%M')}〜{end_dt.strftime('%H:%M')}"
+                        return TextSendMessage(text=response_text)
+
+                # 複数日分の場合は簡素な表示
                 formatted_dates = []
                 for date_str in sorted(auto_added_dates):
                     dt = parser.parse(date_str)
