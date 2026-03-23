@@ -133,9 +133,26 @@ class LineBotHandler:
                             try:
                                 from dateutil import parser
 
+                                # events_dataから重複を除去
+                                unique_events = []
+                                seen_events = set()
+                                for event_info in events_data:
+                                    event_key = (
+                                        event_info.get('title', ''),
+                                        event_info.get('start_datetime', ''),
+                                        event_info.get('end_datetime', '')
+                                    )
+                                    if event_key not in seen_events:
+                                        seen_events.add(event_key)
+                                        unique_events.append(event_info)
+                                    else:
+                                        print(f"[DEBUG] バックグラウンド処理の重複イベントをスキップ: {event_info.get('title')} {event_info.get('start_datetime')}")
+
+                                print(f"[DEBUG] バックグラウンド処理: 元={len(events_data)}件, 重複除去後={len(unique_events)}件")
+
                                 # Batch API用にイベントデータを準備
                                 batch_events = []
-                                for event_info in events_data:
+                                for event_info in unique_events:
                                     try:
                                         start_datetime = parser.parse(event_info['start_datetime'])
                                         end_datetime = parser.parse(event_info['end_datetime'])
@@ -200,7 +217,24 @@ class LineBotHandler:
                     added_events = []
                     failed_events = []
 
+                    # events_dataから重複を除去
+                    unique_events = []
+                    seen_events = set()
                     for event_info in events_data:
+                        event_key = (
+                            event_info.get('title', ''),
+                            event_info.get('start_datetime', ''),
+                            event_info.get('end_datetime', '')
+                        )
+                        if event_key not in seen_events:
+                            seen_events.add(event_key)
+                            unique_events.append(event_info)
+                        else:
+                            print(f"[DEBUG] 「はい」返答時の重複イベントをスキップ: {event_info.get('title')} {event_info.get('start_datetime')}")
+
+                    print(f"[DEBUG] 「はい」返答時の処理: 元={len(events_data)}件, 重複除去後={len(unique_events)}件")
+
+                    for event_info in unique_events:
                         try:
                             from dateutil import parser
                             start_datetime = parser.parse(event_info['start_datetime'])
