@@ -484,6 +484,28 @@ class LineBotHandler:
             # 展開後の予定リストを使用
             dates = expanded_dates if expanded_dates else dates
 
+            # 重複除去：同じtitle, date, time, end_timeを持つイベントを1つにまとめる
+            unique_dates = []
+            seen_events = set()
+            for date_info in dates:
+                if not isinstance(date_info, dict):
+                    continue
+                # イベントの一意キーを作成（title, date, time, end_timeの組み合わせ）
+                event_key = (
+                    date_info.get('title', ''),
+                    date_info.get('date', ''),
+                    date_info.get('time', ''),
+                    date_info.get('end_time', '')
+                )
+                if event_key not in seen_events:
+                    seen_events.add(event_key)
+                    unique_dates.append(date_info)
+                else:
+                    print(f"[DEBUG] 重複イベントをスキップ: {date_info.get('title')} {date_info.get('date')} {date_info.get('time')}")
+
+            dates = unique_dates
+            print(f"[DEBUG] 重複除去後のイベント数: {len(dates)}")
+
             # 効率化: 日付ごとにグループ化して重複チェック
             from collections import defaultdict
             from datetime import datetime, timedelta
@@ -798,6 +820,8 @@ class LineBotHandler:
 
                 # 重複している日のイベントのみをpending_eventsに保存
                 pending_events = []
+                seen_pending = set()  # 重複チェック用
+
                 for date_str, conflict_data in conflicting_dates.items():
                     for event_info in conflict_data['events']:
                         event_date_str = event_info.get('date')
@@ -818,6 +842,13 @@ class LineBotHandler:
                         event_datetime_str = f"{event_date_str}T{event_time_str}:00+09:00"
                         event_end_datetime_str = f"{event_date_str}T{event_end_time_str}:00+09:00"
 
+                        # 重複チェック（タイトル、開始時刻、終了時刻の組み合わせ）
+                        event_key = (event_title, event_datetime_str, event_end_datetime_str)
+                        if event_key in seen_pending:
+                            print(f"[DEBUG] pending_eventsへの重複追加をスキップ: {event_title} {event_datetime_str}")
+                            continue
+
+                        seen_pending.add(event_key)
                         pending_events.append({
                             'title': event_title,
                             'start_datetime': event_datetime_str,
@@ -825,6 +856,7 @@ class LineBotHandler:
                             'description': event_description
                         })
 
+                print(f"[DEBUG] pending_eventsに保存するイベント数: {len(pending_events)}")
                 import json
                 self.db_helper.save_pending_event(line_user_id, json.dumps(pending_events))
 
@@ -886,7 +918,11 @@ class LineBotHandler:
                 response_text += f"（{', '.join(formatted_dates)}）"
                 return TextSendMessage(text=response_text)
 
-            # 予定追加処理（古いロジック - 実質的には使われない）
+            # 予定が追加されなかった場合のエラーメッセージ
+            return TextSendMessage(text="予定を追加できませんでした。")
+
+            # 予定追加処理（古いロジック - 削除済み：上記の新しいBatch API処理で完全に置き換え）
+            # 以下のコードは互換性のために残していますが、実際には実行されません
             for date_info in dates:
                 try:
                     # 辞書でない場合はスキップ
