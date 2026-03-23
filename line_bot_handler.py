@@ -292,23 +292,39 @@ class LineBotHandler:
                     
                     # 結果メッセージを構築（移動時間を含む場合は統一形式）
                     if added_events:
+                        import re
+
+                        # added_eventsから日付を抽出
+                        added_dates = []
+                        for event in added_events:
+                            time_str = event['time']
+                            # "10/18 (土)19:00〜20:00" から "10/18" を抽出
+                            date_match = re.search(r'(\d{1,2}/\d{1,2})', time_str)
+                            if date_match:
+                                date_str = date_match.group(1)
+                                if date_str not in added_dates:
+                                    added_dates.append(date_str)
+
                         # 移動時間が含まれているかチェック
                         has_travel = any('移動時間' in event['title'] for event in added_events)
-                        
-                        if has_travel and len(added_events) > 1:
-                            # 移動時間を含む場合は統一形式で表示
+
+                        # 複数日分の場合は簡素表示
+                        if len(added_dates) > 1:
+                            response_text = f"✅ {len(added_dates)}日分の予定を追加しました\n"
+                            response_text += f"（{', '.join(added_dates)}）"
+                        elif has_travel and len(added_events) > 1:
+                            # 1日分で移動時間を含む場合は統一形式で表示
                             response_text = "✅予定を追加しました！\n\n"
-                            
+
                             # 日付を取得（最初の予定から）
                             first_event = added_events[0]
                             time_str = first_event['time']
                             # "10/18 (土)19:00〜20:00" から "10/18 (土)" を抽出
-                            import re
                             date_match = re.search(r'(\d{1,2}/\d{1,2}\s*\([月火水木金土日]\)\s*)', time_str)
                             date_part = date_match.group(1).strip() if date_match else time_str
                             response_text += f"{date_part}\n"
                             response_text += "────────\n"
-                            
+
                             # 時間順でソート（開始時間でソート）
                             def get_start_time(event):
                                 time_str = event['time']
@@ -317,9 +333,9 @@ class LineBotHandler:
                                 time_part = time_match.group(1) if time_match else time_str
                                 start_time = time_part.split('〜')[0]  # "19:00〜20:00" -> "19:00"
                                 return start_time
-                            
+
                             sorted_events = sorted(added_events, key=get_start_time)
-                            
+
                             # 各予定を番号付きで表示
                             for i, event in enumerate(sorted_events, 1):
                                 # 時間部分を抽出（"10:00~11:00" の形式）
@@ -328,7 +344,7 @@ class LineBotHandler:
                                 time_part = time_match.group(1) if time_match else time_str
                                 response_text += f"{i}. {event['title']}\n"
                                 response_text += f"🕐 {time_part}\n"
-                            
+
                             response_text += "────────"
                         else:
                             # 通常の表示形式
