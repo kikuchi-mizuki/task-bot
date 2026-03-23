@@ -319,9 +319,16 @@ class LineBotHandler:
                             # 日付を取得（最初の予定から）
                             first_event = added_events[0]
                             time_str = first_event['time']
-                            # "10/18 (土)19:00〜20:00" から "10/18 (土)" を抽出
-                            date_match = re.search(r'(\d{1,2}/\d{1,2}\s*\([月火水木金土日]\)\s*)', time_str)
-                            date_part = date_match.group(1).strip() if date_match else time_str
+                            # "3/28（土）05:00〜06:00" から "3/28（土）" を抽出
+                            # 正規表現: 数字/数字（曜日）までをキャプチャ（全角・半角括弧対応）
+                            date_match = re.search(r'(\d{1,2}/\d{1,2}\s*[（(][月火水木金土日][）)])', time_str)
+                            if date_match:
+                                date_part = date_match.group(1).strip()
+                            else:
+                                # マッチしない場合は日付のみ抽出
+                                print(f"[DEBUG] 日付抽出失敗: time_str={time_str}")
+                                date_only = re.search(r'(\d{1,2}/\d{1,2})', time_str)
+                                date_part = date_only.group(1) if date_only else "日付不明"
                             response_text += f"{date_part}\n"
                             response_text += "────────\n"
 
@@ -1068,9 +1075,14 @@ class LineBotHandler:
                     # 日付を取得（最初の予定から）
                     first_event = added_events[0]
                     time_str = first_event['time']
-                    # "10/18 (土)19:00〜20:00" から "10/18 (土)" を抽出
-                    date_match = re.search(r'(\d{1,2}/\d{1,2}\s*\([月火水木金土日]\)\s*)', time_str)
-                    date_part = date_match.group(1).strip() if date_match else time_str
+                    # "3/28（土）05:00〜06:00" から "3/28（土）" を抽出
+                    date_match = re.search(r'(\d{1,2}/\d{1,2}\s*[（(][月火水木金土日][）)])', time_str)
+                    if date_match:
+                        date_part = date_match.group(1).strip()
+                    else:
+                        print(f"[DEBUG] 古いロジック:日付抽出失敗: time_str={time_str}")
+                        date_only = re.search(r'(\d{1,2}/\d{1,2})', time_str)
+                        date_part = date_only.group(1) if date_only else "日付不明"
                     response_text += f"{date_part}\n"
                     response_text += "────────\n"
                     
