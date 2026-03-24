@@ -177,6 +177,44 @@ class AIService:
         allday_dates = set()
         new_dates = []
 
+        # 「X月Y週目」が元のテキストに含まれているかチェック（ループ前に処理）
+        week_match = re.search(r'(\d{1,2})月(\d+)週目', original_text)
+        if week_match:
+            target_month = int(week_match.group(1))
+            target_week = int(week_match.group(2))
+
+            # 指定月の1日を取得
+            target_year = now.year
+            # 月が現在より前なら来年とする
+            if target_month < now.month:
+                target_year += 1
+
+            from datetime import datetime
+            month_start = datetime(target_year, target_month, 1)
+
+            # Y週目の開始日と終了日を計算（1週目=1-7日、2週目=8-14日、...）
+            week_start_day = (target_week - 1) * 7 + 1
+            week_end_day = min(target_week * 7, calendar.monthrange(target_year, target_month)[1])
+
+            # AIが既に週を展開済みかチェック
+            ai_dates_in_target_week = [
+                d for d in parsed['dates']
+                if d.get('date') and d.get('date').startswith(f"{target_year}-{target_month:02d}")
+            ]
+            ai_already_expanded_week = len(ai_dates_in_target_week) >= 5
+
+            if not ai_already_expanded_week:
+                # AIが展開していない場合のみ、週の各日付を生成
+                week_dates = []
+                for day in range(week_start_day, week_end_day + 1):
+                    week_date = datetime(target_year, target_month, day)
+                    week_dates.append({'date': week_date.strftime('%Y-%m-%d')})
+
+                print(f"[DEBUG] {target_month}月{target_week}週目を展開: {len(week_dates)}日分")
+                parsed['dates'] = week_dates
+            else:
+                print(f"[DEBUG] AI既展開の{target_month}月{target_week}週目: {len(ai_dates_in_target_week)}日分")
+
         # 「来週」が元のテキストに含まれているかチェック
         has_next_week = re.search(r'来週', original_text) is not None
         if has_next_week:
