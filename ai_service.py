@@ -53,7 +53,7 @@ class AIService:
                 "- 「4/1.2.3」のようなドット区切りは各日付として認識（月/日1.日2.日3の形式）\n"
                 "- 複数日に時刻条件がある場合、各日に同じ時刻を適用\n\n"
                 "【必須】出力JSON形式（datesは必ず配列で返す）:\n"
-                '{\n  "task_type": "show_schedule/availability_check/add_event",\n  "dates": [{"date": "YYYY-MM-DD", "time": "HH:MM", "end_time": "HH:MM", "title": "タイトル(add_eventのみ)"}]\n}\n\n"
+                '{\n  "task_type": "show_schedule/availability_check/add_event",\n  "dates": [{"date": "YYYY-MM-DD", "time": "HH:MM", "end_time": "HH:MM", "title": "タイトル(add_eventのみ)"}]\n}\n\n'
                 "具体例:\n"
                 "・「3/29 7:00~8:00 フランクリン」→ {\"task_type\": \"add_event\", \"dates\": [{\"date\": \"2026-03-29\", \"time\": \"07:00\", \"end_time\": \"08:30\", \"title\": \"フランクリン\"}]}\n"
                 "・「4/8.14.23 6:00~8:30 TSP」→ 3日分のdatesを返す（各日同じ時間とタイトル）\n"
