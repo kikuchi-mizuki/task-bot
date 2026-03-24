@@ -37,45 +37,36 @@ class AIService:
                 f"あなたはスケジュール管理アシスタントです。現在は {now_jst} です。\n\n"
                 "【重要】ユーザーのメッセージを理解し、必ず以下のJSON形式のみで返してください。説明文は不要です。\n\n"
                 "タスクタイプ:\n"
-                "- show_schedule: 予定の表示・確認（「予定教えて」「何がある？」など）\n"
+                "- show_schedule: 予定の表示・確認（「予定教えて」「何がある？」「X月Y週目の予定」など）\n"
                 "- availability_check: 空き時間確認（日時のみでタイトルなし）\n"
-                "- add_event: 予定追加（日時+タイトルがある場合。例：「3/29 7:00~8:00 フランクリン」）\n\n"
+                "- add_event: 予定追加（日時+タイトルがある場合）\n\n"
                 "【判断基準】\n"
                 "- タイトル/内容がある → add_event\n"
                 "- 日時のみ → availability_check\n"
                 "- 「予定」「何がある」などの質問 → show_schedule\n\n"
                 "日付・時刻の解釈:\n"
-                "- 「明日」「来週」などの自然言語を日付に変換\n"
-                "- 「来週」は月曜から日曜の7日間\n"
-                "- 「X時以降」は必ずX:00〜23:59（例：「13時以降」→13:00〜23:59、「18時以降」→18:00〜23:59）\n"
-                "- 「午前中」は08:00〜12:00\n"
-                "- 「午後」は12:00〜18:00（※「午後」のみで「以降」がない場合）\n"
-                "- 複数日に時刻条件がある場合、各日に同じ時刻を適用\n"
-                "- 「4/1.2.3」のようなドット区切りは各日付として認識（例：「4/8.14.23」→4月8日、4月14日、4月23日）\n"
-                "- ドット区切りの日付は、月/日1.日2.日3の形式で、すべて同じ月\n\n"
+                "- 「明日」「来週」「X月Y週目」などの自然言語を適切に日付に変換\n"
+                "- 「来週」は次の月曜から日曜の7日間\n"
+                "- 「X月Y週目」は7日区切り（1週目=1-7日、2週目=8-14日、3週目=15-21日、4週目=22日以降）を各日のdatesとして返す\n"
+                "- 「X時以降」はX:00〜23:59\n"
+                "- 「午前中」は08:00〜12:00、「午後」は12:00〜18:00\n"
+                "- 「4/1.2.3」のようなドット区切りは各日付として認識（月/日1.日2.日3の形式）\n"
+                "- 複数日に時刻条件がある場合、各日に同じ時刻を適用\n\n"
                 "【必須】出力JSON形式（datesは必ず配列で返す）:\n"
-                '{\n  "task_type": "availability_check",\n  "dates": [{"date": "2026-03-24", "time": "18:00", "end_time": "23:59"}]\n}\n\n'
-                "具体例（必ずdatesキーを使用し、配列で返す）:\n"
-                "【予定追加（add_event）】タイトル/内容がある場合\n"
-                "・「3/29 7:00~8:00 フランクリン」→ {\"task_type\": \"add_event\", \"dates\": [{\"date\": \"2026-03-29\", \"time\": \"07:00\", \"end_time\": \"08:00\", \"title\": \"フランクリン\"}]}\n"
-                "・「明日9時から会議」→ {\"task_type\": \"add_event\", \"dates\": [{\"date\": \"2026-03-22\", \"time\": \"09:00\", \"end_time\": \"10:00\", \"title\": \"会議\"}]}\n"
-                "・「3/27 16:00~17:00 千代さん」→ {\"task_type\": \"add_event\", \"dates\": [{\"date\": \"2026-03-27\", \"time\": \"16:00\", \"end_time\": \"17:00\", \"title\": \"千代さん\"}]}\n"
-                "・「4/8.14.23 6:00~8:30 TSP」→ {\"task_type\": \"add_event\", \"dates\": [{\"date\": \"2026-04-08\", \"time\": \"06:00\", \"end_time\": \"08:30\", \"title\": \"TSP\"}, {\"date\": \"2026-04-14\", \"time\": \"06:00\", \"end_time\": \"08:30\", \"title\": \"TSP\"}, {\"date\": \"2026-04-23\", \"time\": \"06:00\", \"end_time\": \"08:30\", \"title\": \"TSP\"}]}\n\n"
-                "【空き時間確認（availability_check）】日時のみ\n"
-                "・「明日の空き時間」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-22\", \"time\": \"08:00\", \"end_time\": \"22:00\"}]}\n"
-                "・\"来週18:00以降\"→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-24\", \"time\": \"18:00\", \"end_time\": \"23:59\", \"description\": \"来週\"}]}\n"
-                "・「3/29 7:00~8:00」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-29\", \"time\": \"07:00\", \"end_time\": \"08:00\"}]}\n\n"
-                "【予定表示（show_schedule）】質問形式\n"
-                "・「明日の予定教えて」→ {\"task_type\": \"show_schedule\", \"dates\": [{\"date\": \"2026-03-22\"}]}\n\n"
-                "【重要な注意事項】\n"
-                "1. タイトル/内容がある場合は必ず「add_event」\n"
-                "2. 日時のみの場合は「availability_check」\n"
-                "3. dateではなく、必ずdatesキー（配列）を使用\n"
-                "4. titleフィールドは予定追加時のみ設定\n\n"
-                "移動時間:\n"
-                '「移動時間1時間」がある場合は "travel_time_hours": 1.0 を追加\n'
-                "例：「4/8.14.23 6:00~8:30 TSP 移動時間1時間」→ {\"task_type\": \"add_event\", \"dates\": [{\"date\": \"2026-04-08\", \"time\": \"06:00\", \"end_time\": \"08:30\", \"title\": \"TSP\"}, {\"date\": \"2026-04-14\", \"time\": \"06:00\", \"end_time\": \"08:30\", \"title\": \"TSP\"}, {\"date\": \"2026-04-23\", \"time\": \"06:00\", \"end_time\": \"08:30\", \"title\": \"TSP\"}], \"travel_time_hours\": 1.0}\n\n"
-                "会話の文脈を考慮してください。"
+                '{\n  "task_type": "show_schedule/availability_check/add_event",\n  "dates": [{"date": "YYYY-MM-DD", "time": "HH:MM", "end_time": "HH:MM", "title": "タイトル(add_eventのみ)"}]\n}\n\n"
+                "具体例:\n"
+                "・「3/29 7:00~8:00 フランクリン」→ {\"task_type\": \"add_event\", \"dates\": [{\"date\": \"2026-03-29\", \"time\": \"07:00\", \"end_time\": \"08:30\", \"title\": \"フランクリン\"}]}\n"
+                "・「4/8.14.23 6:00~8:30 TSP」→ 3日分のdatesを返す（各日同じ時間とタイトル）\n"
+                "・「明日の空き時間」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-26\", \"time\": \"08:00\", \"end_time\": \"22:00\"}]}\n"
+                "・「明日の予定教えて」→ {\"task_type\": \"show_schedule\", \"dates\": [{\"date\": \"2026-03-26\"}]}\n"
+                "・「4月1週目の予定教えて」→ {\"task_type\": \"show_schedule\", \"dates\": [{\"date\": \"2026-04-01\"}, {\"date\": \"2026-04-02\"}, ... {\"date\": \"2026-04-07\"}]}\n\n"
+                "【注意事項】\n"
+                "- タイトル/内容がある → add_event\n"
+                "- 日時のみ → availability_check\n"
+                "- 予定の質問 → show_schedule\n"
+                "- 必ずdatesキー（配列）を使用\n"
+                "- 「移動時間X時間」がある場合は \"travel_time_hours\": X を追加\n\n"
+                "会話の文脈と自然な日本語の意味を理解して適切に解釈してください。"
             )
 
             # メッセージ構築（会話履歴を含める）
@@ -96,7 +87,7 @@ class AIService:
             })
 
             response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4o-mini",
                 messages=messages,
                 temperature=0.1
             )
@@ -823,7 +814,7 @@ class AIService:
                 "{\n  \"title\": \"イベントタイトル\",\n  \"start_datetime\": \"2024-01-15T09:00:00\",\n  \"end_datetime\": \"2024-01-15T10:00:00\",\n  \"description\": \"説明（オプション）\"\n}\n"
             )
             response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4o-mini",
                 messages=[
                     {
                         "role": "system",
@@ -944,7 +935,7 @@ class AIService:
                 "{\n  \"dates\": [\n    {\n      \"date\": \"2024-01-15\",\n      \"time_range\": \"09:00-18:00\"\n    }\n  ]\n}\n"
             )
             response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4o-mini",
                 messages=[
                     {
                         "role": "system",
