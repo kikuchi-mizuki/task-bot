@@ -25,8 +25,6 @@ class GoogleCalendarService:
         self.db_helper = DBHelper()
         self.creds = None
         self.service = None
-        # カレンダーリストのキャッシュ（ユーザーIDごと）
-        self._calendar_list_cache = {}
         self._authenticate()
     
     def _authenticate(self):
@@ -415,7 +413,7 @@ class GoogleCalendarService:
         return events_info
     
     def get_events_for_time_range(self, start_time, end_time, line_user_id):
-        """指定された時間範囲のイベントを取得します（全てのカレンダーから取得）"""
+        """指定された時間範囲のイベントを取得します（Config.GOOGLE_CALENDAR_IDから取得）"""
         try:
             print(f"[DEBUG] get_events_for_time_range開始")
             print(f"[DEBUG] 入力: start_time={start_time}, end_time={end_time}, line_user_id={line_user_id}")
@@ -438,59 +436,29 @@ class GoogleCalendarService:
 
             print(f"[DEBUG] UTC変換後: utc_start={utc_start}, utc_end={utc_end}")
 
-            # カレンダーリストをキャッシュから取得（ユーザーごと）
-            if line_user_id in self._calendar_list_cache:
-                calendars = self._calendar_list_cache[line_user_id]
-                print(f"[DEBUG] カレンダーリストをキャッシュから取得: {len(calendars)}件")
-            else:
-                # 全てのカレンダーを取得してキャッシュに保存
-                try:
-                    print(f"[DEBUG] カレンダーリストをAPIから取得中...")
-                    calendar_list = service.calendarList().list().execute()
-                    calendars = calendar_list.get('items', [])
-                    self._calendar_list_cache[line_user_id] = calendars
-                    print(f"[DEBUG] 利用可能なカレンダー数: {len(calendars)}")
-                    for cal in calendars:
-                        print(f"[DEBUG]   - {cal.get('summary', '不明')} (ID: {cal.get('id')})")
-                except Exception as e:
-                    print(f"[DEBUG] カレンダーリスト取得エラー: {e}")
-                    calendars = [{'id': Config.GOOGLE_CALENDAR_ID}]
-                    self._calendar_list_cache[line_user_id] = calendars
+            # Config.GOOGLE_CALENDAR_IDから予定を取得（他のメソッドと同じ）
+            try:
+                print(f"[DEBUG] カレンダー '{Config.GOOGLE_CALENDAR_ID}' から予定取得中...")
+                events_result = service.events().list(
+                    calendarId=Config.GOOGLE_CALENDAR_ID,
+                    timeMin=utc_start.isoformat(),
+                    timeMax=utc_end.isoformat(),
+                    singleEvents=True,
+                    orderBy='startTime'
+                ).execute()
 
-            # 全てのカレンダーから予定を取得
-            all_events = []
-            for calendar in calendars:
-                calendar_id = calendar.get('id')
-                calendar_name = calendar.get('summary', calendar_id)
+                events = events_result.get('items', [])
+                print(f"[DEBUG] {len(events)}件の予定を取得")
+            except Exception as e:
+                print(f"[DEBUG] カレンダーからの予定取得エラー: {e}")
+                return []
 
-                try:
-                    print(f"[DEBUG] カレンダー '{calendar_name}' から予定取得中...")
-                    events_result = service.events().list(
-                        calendarId=calendar_id,
-                        timeMin=utc_start.isoformat(),
-                        timeMax=utc_end.isoformat(),
-                        singleEvents=True,
-                        orderBy='startTime'
-                    ).execute()
-
-                    events = events_result.get('items', [])
-                    print(f"[DEBUG]   → {len(events)}件の予定を取得")
-                    all_events.extend(events)
-                except Exception as e:
-                    print(f"[DEBUG] カレンダー '{calendar_name}' からの予定取得エラー: {e}")
-                    continue
-
-            print(f"[DEBUG] 全カレンダーから取得した予定総数: {len(all_events)}")
-
-            # 時刻順にソート
-            all_events = sorted(all_events, key=lambda e: e['start'].get('dateTime', e['start'].get('date', '')))
-
-            if not all_events:
-                print(f"[DEBUG] 全カレンダーを検索したがイベントなし")
+            if not events:
+                print(f"[DEBUG] イベントなし")
                 return []
 
             event_list = []
-            for i, event in enumerate(all_events):
+            for i, event in enumerate(events):
                 print(f"[DEBUG] イベント{i+1}処理: {event.get('summary', 'タイトルなし')}")
                 start = event['start'].get('dateTime', event['start'].get('date'))
                 end = event['end'].get('dateTime', event['end'].get('date'))
@@ -506,7 +474,7 @@ class GoogleCalendarService:
 
             print(f"[DEBUG] 最終イベントリスト: {len(event_list)}件")
             return event_list
-            
+
         except Exception as e:
             print(f"[DEBUG] get_events_for_time_rangeで例外発生: {e}")
             import traceback
