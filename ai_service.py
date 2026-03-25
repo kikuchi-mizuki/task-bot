@@ -157,7 +157,7 @@ JSON形式のみで返答。説明不要。"""
             })
 
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4o",  # より強力なモデルに変更
                 messages=messages,
                 temperature=0  # 0にして決定論的に
             )
