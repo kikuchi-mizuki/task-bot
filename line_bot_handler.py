@@ -1271,7 +1271,40 @@ class LineBotHandler:
             if not dates_info:
                 print(f"[DEBUG] dates_infoが空")
                 return TextSendMessage(text="日付を正しく認識できませんでした。\n\n例: 「明日7/7 15:00〜15:30の空き時間を教えて」")
-            
+
+            # 同じ日付のエントリをマージ（1日1エントリにする）
+            print(f"[DEBUG] dates_info（マージ前）: {len(dates_info)}件")
+            merged_dates = {}
+            for date_info in dates_info:
+                if not isinstance(date_info, dict):
+                    continue
+
+                date_str = date_info.get('date')
+                if not date_str:
+                    continue
+
+                # 同じ日付がまだない場合は追加、ある場合は時間範囲を拡大
+                if date_str not in merged_dates:
+                    merged_dates[date_str] = {
+                        'date': date_str,
+                        'time': date_info.get('time', '08:00'),
+                        'end_time': date_info.get('end_time', '22:00')
+                    }
+                else:
+                    # 既存のエントリと時間範囲をマージ（より広い範囲にする）
+                    existing = merged_dates[date_str]
+                    current_start = date_info.get('time', '08:00')
+                    current_end = date_info.get('end_time', '22:00')
+
+                    # 開始時刻は早い方、終了時刻は遅い方を採用
+                    existing['time'] = min(existing['time'], current_start)
+                    existing['end_time'] = max(existing['end_time'], current_end)
+
+            dates_info = list(merged_dates.values())
+            print(f"[DEBUG] dates_info（マージ後）: {len(dates_info)}件")
+            for i, d in enumerate(dates_info):
+                print(f"[DEBUG]   日付{i+1}: {d['date']} {d.get('time')}〜{d.get('end_time')}")
+
             print(f"[DEBUG] 空き時間計算開始")
             free_slots_by_frame = []
             for i, date_info in enumerate(dates_info):

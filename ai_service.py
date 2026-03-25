@@ -54,7 +54,8 @@ class AIService:
                 "- 「X時以降」はX:00〜23:59\n"
                 "- 「午前中」は08:00〜12:00、「午後」は12:00〜18:00\n"
                 "- 「4/1.2.3」のようなドット区切りは各日付として認識（月/日1.日2.日3の形式）\n"
-                "- 複数日に時刻条件がある場合、各日に同じ時刻を適用\n\n"
+                "- 複数日に時刻条件がある場合、各日に同じ時刻を適用\n"
+                "- **重要**: 空き時間確認では、1日につき1つのエントリ（08:00〜22:00）を返す。1時間ごとに分割しない。\n\n"
                 "必要な時間の長さの解釈:\n"
                 "- 「X時間の打ち合わせ」「X時間の予定」→ required_duration_minutes に X*60 を設定\n"
                 "- 「X分の打ち合わせ」「X分の予定」→ required_duration_minutes に X を設定\n"
@@ -79,7 +80,9 @@ class AIService:
                 "- 「予定」「スケジュール」などの質問で、空き時間のキーワードがない → show_schedule\n"
                 "- 必ずdatesキー（配列）を使用\n"
                 "- 「移動時間X時間」がある場合は \"travel_time_hours\": X を追加\n"
-                "- 「X時間の打ち合わせ」「X時間空いてる」などの表現があれば、必ず \"required_duration_minutes\" を追加\n\n"
+                "- 「X時間の打ち合わせ」「X時間空いてる」などの表現があれば、必ず \"required_duration_minutes\" を追加\n"
+                "- **絶対に守る**: 空き時間確認では、同じ日付に対して複数のエントリを返さない。1日につき1エントリのみ。\n"
+                "- **絶対に守る**: 1時間ごとに分割しない。連続した時間帯は1つのエントリにまとめる。\n\n"
                 "【最重要】\n"
                 "1. 「空き時間」というキーワードがある場合は、どんな状況でも availability_check を選択してください。\n"
                 "2. 会話履歴（過去のメッセージ）の文脈を必ず考慮してください。前回のやり取りで言及された内容や日時を参照してください。\n"
@@ -121,6 +124,21 @@ class AIService:
             # AIの判定を尊重
             logger.info(f"[DEBUG] パース後のJSON: {parsed}")
             logger.info(f"[DEBUG] AIが判定したtask_type: {parsed.get('task_type')}")
+            logger.info(f"[DEBUG] AIが返したdates数: {len(parsed.get('dates', []))}件")
+
+            # 同じ日付が複数ある場合は警告
+            if 'dates' in parsed:
+                date_counts = {}
+                for d in parsed['dates']:
+                    if isinstance(d, dict) and 'date' in d:
+                        date_str = d['date']
+                        date_counts[date_str] = date_counts.get(date_str, 0) + 1
+
+                duplicates = {date: count for date, count in date_counts.items() if count > 1}
+                if duplicates:
+                    logger.warning(f"[WARNING] AIが同じ日付を複数回返しました: {duplicates}")
+                    for date, count in duplicates.items():
+                        logger.warning(f"[WARNING]   {date}: {count}回")
 
             # 'date'キーがあり'dates'がない場合、'dates'配列に変換
             if 'date' in parsed and 'dates' not in parsed:
