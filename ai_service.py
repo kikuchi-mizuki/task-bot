@@ -43,16 +43,20 @@ class AIService:
    - 「予定」「スケジュール」のみ（空き時間を聞いていない） → show_schedule
    - 日時 + タイトル/内容 → add_event
 
-2. **時間範囲の指定方法（重要）**
+2. **必要な空き時間の長さ（required_duration_minutes）- 最優先で計算**
+   - 基本: 「X時間の打ち合わせ」→ X*60
+   - **移動時間の処理（重要）**:
+     - 「移動時間Y分」が指定された場合、**必ず往復分（Y*2）を加算**
+     - 例: 「1時間打合せ 移動時間30分」→ 60 + 30*2 = **120分**
+     - 例: 「2時間打合せ 移動時間1時間」→ 120 + 60*2 = **240分**
+   - **これは時間範囲（time〜end_time）とは別物！**
+   - **time〜end_timeは常に検索範囲（08:00〜22:00など）**
+
+3. **時間範囲の指定方法**
    - availability_check: 各日付につき1エントリ、時間範囲は08:00〜22:00
    - 午後のみなら12:00〜18:00、午前のみなら08:00〜12:00
    - **絶対に1時間ごとに分割しない**
    - **同じ日付に複数エントリを返さない**
-
-3. **必要な空き時間の長さ（required_duration_minutes）**
-   - 「X時間の打ち合わせ」「X時間空いてる」→ required_duration_minutes: X*60
-   - **これは時間範囲（time〜end_time）とは別物！**
-   - **time〜end_timeは常に検索範囲（08:00〜22:00など）、required_duration_minutesはフィルタ条件**
 
 ## 出力形式
 
@@ -101,7 +105,20 @@ class AIService:
 }}
 ```
 
-**例4: 「3/29 7:00~8:00 フランクリン」**
+**例4: 「3月で1時間打合せできる日 移動時間30分」**
+```json
+{{
+  "task_type": "availability_check",
+  "dates": [
+    {{"date": "2026-03-01", "time": "08:00", "end_time": "22:00"}},
+    ...全日
+  ],
+  "required_duration_minutes": 120
+}}
+```
+注意: 1時間打合せ(60分) + 移動往復(30*2=60分) = 120分
+
+**例5: 「3/29 7:00~8:00 フランクリン」**
 ```json
 {{
   "task_type": "add_event",
@@ -152,6 +169,8 @@ JSON形式のみで返答。説明不要。"""
             logger.info(f"[DEBUG] パース後のJSON: {parsed}")
             logger.info(f"[DEBUG] AIが判定したtask_type: {parsed.get('task_type')}")
             logger.info(f"[DEBUG] AIが返したdates数: {len(parsed.get('dates', []))}件")
+            if parsed.get('required_duration_minutes'):
+                logger.info(f"[DEBUG] required_duration_minutes: {parsed['required_duration_minutes']}分")
 
             # 同じ日付が複数ある場合は警告
             if 'dates' in parsed:
@@ -174,10 +193,41 @@ JSON形式のみで返答。説明不要。"""
                 parsed['dates'] = [{'date': date_value}]
                 del parsed['date']  # 重複を避けるため削除
 
+            # 移動時間の処理（フォールバック）
+            import re
+            travel_time_match = re.search(r'移動時間[はわ]?(\d+)分', text) or re.search(r'移動時間[はわ]?(\d+)時間', text)
+            if travel_time_match and parsed.get('task_type') == 'availability_check':
+                travel_minutes = int(travel_time_match.group(1))
+                if '時間' in travel_time_match.group(0):
+                    travel_minutes *= 60
+
+                logger.info(f"[DEBUG] 移動時間を検出: {travel_minutes}分（往復: {travel_minutes*2}分）")
+
+                # 打合せ時間を推定
+                meeting_match = re.search(r'(\d+)時間[打うち][ち合あわ]?[合せ]?[わせ]?', text) or re.search(r'(\d+)分[打うち][ち合あわ]?[合せ]?[わせ]?', text)
+                if meeting_match:
+                    meeting_minutes = int(meeting_match.group(1))
+                    if '時間' in meeting_match.group(0):
+                        meeting_minutes *= 60
+
+                    expected_total = meeting_minutes + travel_minutes * 2  # 往復
+                    logger.info(f"[DEBUG] 打合せ時間: {meeting_minutes}分 + 移動往復: {travel_minutes*2}分 = {expected_total}分")
+
+                    # AIがrequired_duration_minutesを正しく計算しているかチェック
+                    if parsed.get('required_duration_minutes'):
+                        current_req = parsed['required_duration_minutes']
+                        if current_req < expected_total:
+                            logger.warning(f"[WARNING] AIが移動時間を含めていない: {current_req}分 < {expected_total}分")
+                            logger.warning(f"[WARNING] 修正: {current_req}分 → {expected_total}分")
+                            parsed['required_duration_minutes'] = expected_total
+                    else:
+                        logger.warning(f"[WARNING] AIがrequired_duration_minutesを返していない、追加します: {expected_total}分")
+                        parsed['required_duration_minutes'] = expected_total
+
             # required_duration_minutesがある場合、AIが誤って短い枠を生成していないかチェック
             if parsed.get('required_duration_minutes') and parsed.get('task_type') == 'availability_check':
                 required_minutes = parsed['required_duration_minutes']
-                logger.info(f"[DEBUG] required_duration_minutes検出: {required_minutes}分")
+                logger.info(f"[DEBUG] required_duration_minutes最終確認: {required_minutes}分")
 
                 # 各dateのtime〜end_timeが required_duration_minutes と同じ長さの場合は修正
                 for d in parsed.get('dates', []):
