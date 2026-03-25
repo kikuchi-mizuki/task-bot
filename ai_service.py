@@ -35,6 +35,8 @@ class AIService:
             now_jst = self._get_jst_now_str()
             system_prompt = (
                 f"あなたはスケジュール管理アシスタントです。現在は {now_jst} です。\n\n"
+                "【最重要】会話履歴がある場合は、必ず履歴の文脈を考慮してユーザーの意図を判断してください。\n"
+                "過去のやり取りで言及された内容や文脈を踏まえて、現在のメッセージを解釈してください。\n\n"
                 "【重要】ユーザーのメッセージを理解し、必ず以下のJSON形式のみで返してください。説明文は不要です。\n\n"
                 "タスクタイプ:\n"
                 "- show_schedule: 予定の表示・確認（「予定教えて」「何がある？」「スケジュール見せて」など、明示的に予定を見たい場合）\n"
@@ -69,8 +71,11 @@ class AIService:
                 "- 「予定」「スケジュール」などの質問で、空き時間のキーワードがない → show_schedule\n"
                 "- 必ずdatesキー（配列）を使用\n"
                 "- 「移動時間X時間」がある場合は \"travel_time_hours\": X を追加\n\n"
-                "【最重要】「空き時間」というキーワードがある場合は、どんな状況でも availability_check を選択してください。\n"
-                "会話の文脈と自然な日本語の意味を理解して適切に解釈してください。"
+                "【最重要】\n"
+                "1. 「空き時間」というキーワードがある場合は、どんな状況でも availability_check を選択してください。\n"
+                "2. 会話履歴（過去のメッセージ）の文脈を必ず考慮してください。前回のやり取りで言及された内容や日時を参照してください。\n"
+                "3. 現在のメッセージと会話履歴を組み合わせて、ユーザーの真の意図を理解してください。\n"
+                "4. 会話履歴に基づいて、省略された情報（日時、タイトルなど）を補完してください。"
             )
 
             # メッセージ構築（会話履歴を含める）
@@ -78,11 +83,15 @@ class AIService:
 
             # 会話履歴を追加（最新5件まで）
             if conversation_history:
-                for msg in conversation_history[-5:]:
+                logger.info(f"[DEBUG] 会話履歴を追加: {len(conversation_history)}件（最新5件まで使用）")
+                for i, msg in enumerate(conversation_history[-5:]):
+                    logger.info(f"[DEBUG] 会話履歴[{i}]: role={msg['role']}, content={msg['content'][:50]}...")
                     messages.append({
                         "role": msg['role'],
                         "content": msg['content']
                     })
+            else:
+                logger.info(f"[DEBUG] 会話履歴なし（初回メッセージまたは履歴なし）")
 
             # 現在のユーザーメッセージを追加
             messages.append({

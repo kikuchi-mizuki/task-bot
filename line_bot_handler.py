@@ -410,9 +410,14 @@ class LineBotHandler:
 
             # 会話履歴を取得
             conversation_history = self.db_helper.get_conversation_history(line_user_id, limit=5)
+            print(f"[DEBUG] 会話履歴取得: {len(conversation_history) if conversation_history else 0}件")
+            if conversation_history:
+                for i, msg in enumerate(conversation_history):
+                    print(f"[DEBUG] 履歴[{i}]: {msg['role']} - {msg['content'][:30]}...")
 
             # ユーザーメッセージを会話履歴に保存
             self.db_helper.save_conversation_message(line_user_id, 'user', user_message)
+            print(f"[DEBUG] ユーザーメッセージを保存: {user_message[:50]}...")
 
             # AIを使ってメッセージの意図を判断（会話履歴を渡す）
             ai_result = self.ai_service.extract_dates_and_times(user_message, conversation_history)
