@@ -61,7 +61,10 @@ class AIService:
                 "- 「X分の打ち合わせ」「X分の予定」→ required_duration_minutes に X を設定\n"
                 "- 「1時間打ち合わせできる日」→ required_duration_minutes: 60\n"
                 "- 「2時間空いてる日」→ required_duration_minutes: 120\n"
-                "- 時間の長さが指定されていない場合は required_duration_minutes を省略\n\n"
+                "- 時間の長さが指定されていない場合は required_duration_minutes を省略\n"
+                "- **重要**: required_duration_minutesは検索範囲を制限するものではありません。\n"
+                "- **重要**: timeとend_timeは常に1日の範囲（08:00〜22:00）を指定してください。\n"
+                "- **重要**: required_duration_minutesはフィルタリング条件であり、この長さ以上の空き時間のみを表示するために使用します。\n\n"
                 "【必須】出力JSON形式（datesは必ず配列で返す）:\n"
                 '{\n  "task_type": "show_schedule/availability_check/add_event",\n  "dates": [{"date": "YYYY-MM-DD", "time": "HH:MM", "end_time": "HH:MM", "title": "タイトル(add_eventのみ)"}],\n  "required_duration_minutes": 60 (オプション: 「X時間の打ち合わせ」などで指定された場合のみ)\n}\n\n'
                 "具体例:\n"
@@ -69,7 +72,8 @@ class AIService:
                 "・「4/8.14.23 6:00~8:30 TSP」→ 3日分のdatesを返す（各日同じ時間とタイトル）\n"
                 "・「明日の空き時間」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-26\", \"time\": \"08:00\", \"end_time\": \"22:00\"}]}\n"
                 "・「3月で1時間打ち合わせできる日」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-01\", \"time\": \"08:00\", \"end_time\": \"22:00\"}, {\"date\": \"2026-03-02\", \"time\": \"08:00\", \"end_time\": \"22:00\"}, ... {\"date\": \"2026-03-31\", \"time\": \"08:00\", \"end_time\": \"22:00\"}], \"required_duration_minutes\": 60}\n"
-                "・「来週2時間空いてる日」→ {\"task_type\": \"availability_check\", \"dates\": [来週の7日分], \"required_duration_minutes\": 120}\n"
+                "・「3月で2時間打ち合わせできる日」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-01\", \"time\": \"08:00\", \"end_time\": \"22:00\"}, ... {\"date\": \"2026-03-31\", \"time\": \"08:00\", \"end_time\": \"22:00\"}], \"required_duration_minutes\": 120}（注意：timeとend_timeは2時間ではなく、1日全体の範囲！）\n"
+                "・「来週2時間空いてる日」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"来週月曜\", \"time\": \"08:00\", \"end_time\": \"22:00\"}, ... 7日分], \"required_duration_minutes\": 120}（注意：timeとend_timeは常に08:00〜22:00！）\n"
                 "・「4月1週目の午後の空き時間」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-04-01\", \"time\": \"12:00\", \"end_time\": \"18:00\"}, {\"date\": \"2026-04-02\", \"time\": \"12:00\", \"end_time\": \"18:00\"}, ... {\"date\": \"2026-04-07\", \"time\": \"12:00\", \"end_time\": \"18:00\"}]}\n"
                 "・「明日の予定教えて」→ {\"task_type\": \"show_schedule\", \"dates\": [{\"date\": \"2026-03-26\"}]}\n"
                 "・「4月1週目の予定」→ {\"task_type\": \"show_schedule\", \"dates\": [{\"date\": \"2026-04-01\"}, {\"date\": \"2026-04-02\"}, ... {\"date\": \"2026-04-07\"}]}\n\n"
@@ -88,7 +92,8 @@ class AIService:
                 "2. 会話履歴（過去のメッセージ）の文脈を必ず考慮してください。前回のやり取りで言及された内容や日時を参照してください。\n"
                 "3. 現在のメッセージと会話履歴を組み合わせて、ユーザーの真の意図を理解してください。\n"
                 "4. 会話履歴に基づいて、省略された情報（日時、タイトルなど）を補完してください。\n"
-                "5. 「X時間の打ち合わせ」「X時間空いてる」などの時間要件を必ず抽出して required_duration_minutes に設定してください。"
+                "5. 「X時間の打ち合わせ」「X時間空いてる」などの時間要件を必ず抽出して required_duration_minutes に設定してください。\n"
+                "6. **絶対に間違えないでください**: required_duration_minutesが指定されていても、timeとend_timeは1日全体の範囲（08:00〜22:00）を指定してください。required_duration_minutesの長さで枠を作らないでください！"
             )
 
             # メッセージ構築（会話履歴を含める）
@@ -146,6 +151,29 @@ class AIService:
                 logger.warning(f"[WARNING] AIが'date'キーで返答。'dates'配列に変換します: {date_value}")
                 parsed['dates'] = [{'date': date_value}]
                 del parsed['date']  # 重複を避けるため削除
+
+            # required_duration_minutesがある場合、AIが誤って短い枠を生成していないかチェック
+            if parsed.get('required_duration_minutes') and parsed.get('task_type') == 'availability_check':
+                required_minutes = parsed['required_duration_minutes']
+                logger.info(f"[DEBUG] required_duration_minutes検出: {required_minutes}分")
+
+                # 各dateのtime〜end_timeが required_duration_minutes と同じ長さの場合は修正
+                for d in parsed.get('dates', []):
+                    if isinstance(d, dict) and d.get('time') and d.get('end_time'):
+                        from datetime import datetime
+                        try:
+                            start = datetime.strptime(d['time'], "%H:%M")
+                            end = datetime.strptime(d['end_time'], "%H:%M")
+                            duration_minutes = int((end - start).total_seconds() / 60)
+
+                            # 枠の長さがrequired_duration_minutesとほぼ同じ（±10分）の場合
+                            if abs(duration_minutes - required_minutes) <= 10:
+                                logger.warning(f"[WARNING] AIが誤ってrequired_duration_minutesと同じ長さの枠を生成: {d['time']}〜{d['end_time']} ({duration_minutes}分)")
+                                logger.warning(f"[WARNING] 1日全体の範囲（08:00〜22:00）に修正します")
+                                d['time'] = '08:00'
+                                d['end_time'] = '22:00'
+                        except Exception as e:
+                            logger.error(f"[ERROR] 時間の長さチェックエラー: {e}")
 
             if 'dates' in parsed:
                 logger.info(f"[DEBUG] datesの内容: {parsed['dates']}")
