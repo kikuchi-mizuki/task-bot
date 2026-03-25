@@ -25,6 +25,8 @@ class GoogleCalendarService:
         self.db_helper = DBHelper()
         self.creds = None
         self.service = None
+        # カレンダーリストのキャッシュ（ユーザーIDごと）
+        self._calendar_list_cache = {}
         self._authenticate()
     
     def _authenticate(self):
@@ -436,16 +438,24 @@ class GoogleCalendarService:
 
             print(f"[DEBUG] UTC変換後: utc_start={utc_start}, utc_end={utc_end}")
 
-            # 全てのカレンダーを取得
-            try:
-                calendar_list = service.calendarList().list().execute()
-                calendars = calendar_list.get('items', [])
-                print(f"[DEBUG] 利用可能なカレンダー数: {len(calendars)}")
-                for cal in calendars:
-                    print(f"[DEBUG]   - {cal.get('summary', '不明')} (ID: {cal.get('id')})")
-            except Exception as e:
-                print(f"[DEBUG] カレンダーリスト取得エラー: {e}")
-                calendars = [{'id': Config.GOOGLE_CALENDAR_ID}]
+            # カレンダーリストをキャッシュから取得（ユーザーごと）
+            if line_user_id in self._calendar_list_cache:
+                calendars = self._calendar_list_cache[line_user_id]
+                print(f"[DEBUG] カレンダーリストをキャッシュから取得: {len(calendars)}件")
+            else:
+                # 全てのカレンダーを取得してキャッシュに保存
+                try:
+                    print(f"[DEBUG] カレンダーリストをAPIから取得中...")
+                    calendar_list = service.calendarList().list().execute()
+                    calendars = calendar_list.get('items', [])
+                    self._calendar_list_cache[line_user_id] = calendars
+                    print(f"[DEBUG] 利用可能なカレンダー数: {len(calendars)}")
+                    for cal in calendars:
+                        print(f"[DEBUG]   - {cal.get('summary', '不明')} (ID: {cal.get('id')})")
+                except Exception as e:
+                    print(f"[DEBUG] カレンダーリスト取得エラー: {e}")
+                    calendars = [{'id': Config.GOOGLE_CALENDAR_ID}]
+                    self._calendar_list_cache[line_user_id] = calendars
 
             # 全てのカレンダーから予定を取得
             all_events = []
