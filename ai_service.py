@@ -33,68 +33,90 @@ class AIService:
         """
         try:
             now_jst = self._get_jst_now_str()
-            system_prompt = (
-                f"あなたはスケジュール管理アシスタントです。現在は {now_jst} です。\n\n"
-                "【最重要】会話履歴がある場合は、必ず履歴の文脈を考慮してユーザーの意図を判断してください。\n"
-                "過去のやり取りで言及された内容や文脈を踏まえて、現在のメッセージを解釈してください。\n\n"
-                "【重要】ユーザーのメッセージを理解し、必ず以下のJSON形式のみで返してください。説明文は不要です。\n\n"
-                "タスクタイプ:\n"
-                "- show_schedule: 予定の表示・確認（「予定教えて」「何がある？」「スケジュール見せて」など、明示的に予定を見たい場合）\n"
-                "- availability_check: 空き時間確認（「空き時間」「空いてる時間」「いつ空いてる」などのキーワードがある場合、または日時のみでタイトルなし）\n"
-                "- add_event: 予定追加（日時+タイトルがある場合）\n\n"
-                "【判断基準の優先順位】\n"
-                "1. 「空き時間」「空いてる」「フリー」などのキーワードがある → availability_check（最優先）\n"
-                "2. タイトル/内容がある → add_event\n"
-                "3. 「予定」「スケジュール」「何がある」などの質問で、空き時間を聞いていない → show_schedule\n"
-                "4. 日時のみで空き時間も聞いていない → availability_check\n\n"
-                "日付・時刻の解釈:\n"
-                "- 「明日」「来週」「X月Y週目」などの自然言語を適切に日付に変換\n"
-                "- 「来週」は次の月曜から日曜の7日間\n"
-                "- 「X月Y週目」は7日区切り（1週目=1-7日、2週目=8-14日、3週目=15-21日、4週目=22日以降）を各日のdatesとして返す\n"
-                "- 「X時以降」はX:00〜23:59\n"
-                "- 「午前中」は08:00〜12:00、「午後」は12:00〜18:00\n"
-                "- 「4/1.2.3」のようなドット区切りは各日付として認識（月/日1.日2.日3の形式）\n"
-                "- 複数日に時刻条件がある場合、各日に同じ時刻を適用\n"
-                "- **重要**: 空き時間確認では、1日につき1つのエントリ（08:00〜22:00）を返す。1時間ごとに分割しない。\n\n"
-                "必要な時間の長さの解釈:\n"
-                "- 「X時間の打ち合わせ」「X時間の予定」→ required_duration_minutes に X*60 を設定\n"
-                "- 「X分の打ち合わせ」「X分の予定」→ required_duration_minutes に X を設定\n"
-                "- 「1時間打ち合わせできる日」→ required_duration_minutes: 60\n"
-                "- 「2時間空いてる日」→ required_duration_minutes: 120\n"
-                "- 時間の長さが指定されていない場合は required_duration_minutes を省略\n"
-                "- **重要**: required_duration_minutesは検索範囲を制限するものではありません。\n"
-                "- **重要**: timeとend_timeは常に1日の範囲（08:00〜22:00）を指定してください。\n"
-                "- **重要**: required_duration_minutesはフィルタリング条件であり、この長さ以上の空き時間のみを表示するために使用します。\n\n"
-                "【必須】出力JSON形式（datesは必ず配列で返す）:\n"
-                '{\n  "task_type": "show_schedule/availability_check/add_event",\n  "dates": [{"date": "YYYY-MM-DD", "time": "HH:MM", "end_time": "HH:MM", "title": "タイトル(add_eventのみ)"}],\n  "required_duration_minutes": 60 (オプション: 「X時間の打ち合わせ」などで指定された場合のみ)\n}\n\n'
-                "具体例:\n"
-                "・「3/29 7:00~8:00 フランクリン」→ {\"task_type\": \"add_event\", \"dates\": [{\"date\": \"2026-03-29\", \"time\": \"07:00\", \"end_time\": \"08:30\", \"title\": \"フランクリン\"}]}\n"
-                "・「4/8.14.23 6:00~8:30 TSP」→ 3日分のdatesを返す（各日同じ時間とタイトル）\n"
-                "・「明日の空き時間」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-26\", \"time\": \"08:00\", \"end_time\": \"22:00\"}]}\n"
-                "・「3月で1時間打ち合わせできる日」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-01\", \"time\": \"08:00\", \"end_time\": \"22:00\"}, {\"date\": \"2026-03-02\", \"time\": \"08:00\", \"end_time\": \"22:00\"}, ... {\"date\": \"2026-03-31\", \"time\": \"08:00\", \"end_time\": \"22:00\"}], \"required_duration_minutes\": 60}\n"
-                "・「3月で2時間打ち合わせできる日」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-01\", \"time\": \"08:00\", \"end_time\": \"22:00\"}, ... {\"date\": \"2026-03-31\", \"time\": \"08:00\", \"end_time\": \"22:00\"}], \"required_duration_minutes\": 120}（注意：timeとend_timeは2時間ではなく、1日全体の範囲！）\n"
-                "・「来週2時間空いてる日」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"来週月曜\", \"time\": \"08:00\", \"end_time\": \"22:00\"}, ... 7日分], \"required_duration_minutes\": 120}（注意：timeとend_timeは常に08:00〜22:00！）\n"
-                "・「4月1週目の午後の空き時間」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-04-01\", \"time\": \"12:00\", \"end_time\": \"18:00\"}, {\"date\": \"2026-04-02\", \"time\": \"12:00\", \"end_time\": \"18:00\"}, ... {\"date\": \"2026-04-07\", \"time\": \"12:00\", \"end_time\": \"18:00\"}]}\n"
-                "・「明日の予定教えて」→ {\"task_type\": \"show_schedule\", \"dates\": [{\"date\": \"2026-03-26\"}]}\n"
-                "・「4月1週目の予定」→ {\"task_type\": \"show_schedule\", \"dates\": [{\"date\": \"2026-04-01\"}, {\"date\": \"2026-04-02\"}, ... {\"date\": \"2026-04-07\"}]}\n\n"
-                "【注意事項】\n"
-                "- 「空き時間」「空いてる」「フリー」というキーワードがあれば必ず availability_check\n"
-                "- タイトル/内容がある → add_event\n"
-                "- 日時のみでキーワードなし → availability_check\n"
-                "- 「予定」「スケジュール」などの質問で、空き時間のキーワードがない → show_schedule\n"
-                "- 必ずdatesキー（配列）を使用\n"
-                "- 「移動時間X時間」がある場合は \"travel_time_hours\": X を追加\n"
-                "- 「X時間の打ち合わせ」「X時間空いてる」などの表現があれば、必ず \"required_duration_minutes\" を追加\n"
-                "- **絶対に守る**: 空き時間確認では、同じ日付に対して複数のエントリを返さない。1日につき1エントリのみ。\n"
-                "- **絶対に守る**: 1時間ごとに分割しない。連続した時間帯は1つのエントリにまとめる。\n\n"
-                "【最重要】\n"
-                "1. 「空き時間」というキーワードがある場合は、どんな状況でも availability_check を選択してください。\n"
-                "2. 会話履歴（過去のメッセージ）の文脈を必ず考慮してください。前回のやり取りで言及された内容や日時を参照してください。\n"
-                "3. 現在のメッセージと会話履歴を組み合わせて、ユーザーの真の意図を理解してください。\n"
-                "4. 会話履歴に基づいて、省略された情報（日時、タイトルなど）を補完してください。\n"
-                "5. 「X時間の打ち合わせ」「X時間空いてる」などの時間要件を必ず抽出して required_duration_minutes に設定してください。\n"
-                "6. **絶対に間違えないでください**: required_duration_minutesが指定されていても、timeとend_timeは1日全体の範囲（08:00〜22:00）を指定してください。required_duration_minutesの長さで枠を作らないでください！"
-            )
+            # シンプルで明確なプロンプト（優先順位順に構造化）
+            system_prompt = f"""あなたはスケジュール管理アシスタントです。現在は {now_jst} です。
+
+## タスク判定ルール（優先順位順、最も重要）
+
+1. **キーワードで判定**
+   - 「空き時間」「空いてる」「打ち合わせできる日」が含まれる → availability_check
+   - 「予定」「スケジュール」のみ（空き時間を聞いていない） → show_schedule
+   - 日時 + タイトル/内容 → add_event
+
+2. **時間範囲の指定方法（重要）**
+   - availability_check: 各日付につき1エントリ、時間範囲は08:00〜22:00
+   - 午後のみなら12:00〜18:00、午前のみなら08:00〜12:00
+   - **絶対に1時間ごとに分割しない**
+   - **同じ日付に複数エントリを返さない**
+
+3. **必要な空き時間の長さ（required_duration_minutes）**
+   - 「X時間の打ち合わせ」「X時間空いてる」→ required_duration_minutes: X*60
+   - **これは時間範囲（time〜end_time）とは別物！**
+   - **time〜end_timeは常に検索範囲（08:00〜22:00など）、required_duration_minutesはフィルタ条件**
+
+## 出力形式
+
+```json
+{{
+  "task_type": "availability_check",
+  "dates": [{{"date": "YYYY-MM-DD", "time": "HH:MM", "end_time": "HH:MM"}}],
+  "required_duration_minutes": 120
+}}
+```
+
+## 正しい例
+
+**例1: 「3月で2時間打ち合わせできる日」**
+```json
+{{
+  "task_type": "availability_check",
+  "dates": [
+    {{"date": "2026-03-01", "time": "08:00", "end_time": "22:00"}},
+    {{"date": "2026-03-02", "time": "08:00", "end_time": "22:00"}},
+    ...全日
+  ],
+  "required_duration_minutes": 120
+}}
+```
+注意: time〜end_timeは2時間ではなく1日全体（08:00〜22:00）！
+
+**例2: 「明日の空き時間」**
+```json
+{{
+  "task_type": "availability_check",
+  "dates": [{{"date": "2026-03-26", "time": "08:00", "end_time": "22:00"}}]
+}}
+```
+
+**例3: 「4月1週目の予定」**
+```json
+{{
+  "task_type": "show_schedule",
+  "dates": [
+    {{"date": "2026-04-01"}},
+    {{"date": "2026-04-02"}},
+    ...
+    {{"date": "2026-04-07"}}
+  ]
+}}
+```
+
+**例4: 「3/29 7:00~8:00 フランクリン」**
+```json
+{{
+  "task_type": "add_event",
+  "dates": [{{"date": "2026-03-29", "time": "07:00", "end_time": "08:00", "title": "フランクリン"}}]
+}}
+```
+
+## 日付解釈
+
+- 「X月」→ その月の全日
+- 「X月Y週目」→ (Y-1)*7+1日 〜 Y*7日
+- 「来週」→ 次の月曜〜日曜
+- 「午後」→ time: 12:00, end_time: 18:00
+
+JSON形式のみで返答。説明不要。"""
 
             # メッセージ構築（会話履歴を含める）
             messages = [{"role": "system", "content": system_prompt}]
@@ -120,7 +142,7 @@ class AIService:
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages,
-                temperature=0.1
+                temperature=0  # 0にして決定論的に
             )
             result = response.choices[0].message.content
             logger.info(f"[DEBUG] AI生レスポンス: {result}")
