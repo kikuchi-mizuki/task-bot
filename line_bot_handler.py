@@ -438,7 +438,9 @@ class LineBotHandler:
                 response_message = self._handle_show_schedule(ai_result.get('dates', []), line_user_id)
             elif task_type == 'availability_check':
                 print(f"[DEBUG] dates_info: {ai_result.get('dates', [])}")
-                response_message = self._handle_availability_check(ai_result.get('dates', []), line_user_id)
+                required_duration = ai_result.get('required_duration_minutes')
+                print(f"[DEBUG] required_duration_minutes: {required_duration}")
+                response_message = self._handle_availability_check(ai_result.get('dates', []), line_user_id, required_duration)
             elif task_type == 'add_event':
                 # 予定追加時の重複確認ロジック（複数予定対応）
                 if not self.calendar_service:
@@ -1239,12 +1241,19 @@ class LineBotHandler:
             traceback.print_exc()
             return TextSendMessage(text=f"予定表示でエラーが発生しました: {str(e)}")
 
-    def _handle_availability_check(self, dates_info, line_user_id):
-        """空き時間確認を処理します"""
+    def _handle_availability_check(self, dates_info, line_user_id, required_duration_minutes=None):
+        """空き時間確認を処理します
+
+        Args:
+            dates_info: 日付情報のリスト
+            line_user_id: LINEユーザーID
+            required_duration_minutes: 必要な空き時間の長さ（分）。指定された場合、この長さ以上の空き時間のみを返す
+        """
         try:
             print(f"[DEBUG] _handle_availability_check開始")
             print(f"[DEBUG] dates_info: {dates_info}")
             print(f"[DEBUG] line_user_id: {line_user_id}")
+            print(f"[DEBUG] required_duration_minutes: {required_duration_minutes}")
             
             # ユーザーの認証状態をチェック
             if not self._check_user_auth(line_user_id):
@@ -1342,11 +1351,44 @@ class LineBotHandler:
                     print(f"[DEBUG] 日付{i+1}の必須項目が不足: date_str={date_str}, start_time={start_time}, end_time={end_time}")
             
             print(f"[DEBUG] 全日付処理完了、free_slots_by_frame: {free_slots_by_frame}")
-            
+
+            # required_duration_minutesが指定されている場合、フィルタリング
+            if required_duration_minutes and required_duration_minutes > 0:
+                print(f"[DEBUG] 空き時間をフィルタリング: required_duration_minutes={required_duration_minutes}")
+                filtered_frames = []
+                for frame in free_slots_by_frame:
+                    filtered_slots = []
+                    for slot in frame.get('free_slots', []):
+                        # 空き時間の長さを計算（分単位）
+                        try:
+                            start_time = datetime.strptime(slot['start'], "%H:%M")
+                            end_time = datetime.strptime(slot['end'], "%H:%M")
+                            duration_minutes = int((end_time - start_time).total_seconds() / 60)
+
+                            print(f"[DEBUG] 空き時間 {slot['start']}〜{slot['end']}: {duration_minutes}分")
+
+                            # required_duration_minutes以上の空き時間のみ追加
+                            if duration_minutes >= required_duration_minutes:
+                                filtered_slots.append(slot)
+                                print(f"[DEBUG] → 条件を満たす（{duration_minutes}分 >= {required_duration_minutes}分）")
+                            else:
+                                print(f"[DEBUG] → 条件を満たさない（{duration_minutes}分 < {required_duration_minutes}分）")
+                        except Exception as e:
+                            print(f"[DEBUG] 空き時間の長さ計算エラー: {e}")
+                            continue
+
+                    # フィルタリング後の空き時間がある場合のみ追加
+                    if filtered_slots:
+                        frame['free_slots'] = filtered_slots
+                        filtered_frames.append(frame)
+
+                free_slots_by_frame = filtered_frames
+                print(f"[DEBUG] フィルタリング後: {len(free_slots_by_frame)}日分")
+
             print(f"[DEBUG] format_free_slots_response_by_frame呼び出し")
             response_text = self.ai_service.format_free_slots_response_by_frame(free_slots_by_frame)
             print(f"[DEBUG] レスポンス生成完了: {response_text}")
-            
+
             return TextSendMessage(text=response_text)
             
         except Exception as e:
@@ -1375,7 +1417,8 @@ class LineBotHandler:
                 # 日程のみの場合は空き時間確認として処理
                 dates_info = self.ai_service.extract_dates_and_times(user_message)
                 if 'error' not in dates_info and dates_info.get('dates'):
-                    return self._handle_availability_check(dates_info.get('dates', []), line_user_id)
+                    required_duration = dates_info.get('required_duration_minutes')
+                    return self._handle_availability_check(dates_info.get('dates', []), line_user_id, required_duration)
                 
                 return TextSendMessage(text="・日時を打つと空き時間を返します\n・予定を打つとカレンダーに追加します\n\n例：\n・「明日の空き時間」\n・「7/15 15:00〜16:00の空き時間」\n・「明日の午前9時から会議を追加して」\n・「来週月曜日の14時から打ち合わせ」")
             

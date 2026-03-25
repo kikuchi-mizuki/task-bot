@@ -55,12 +55,20 @@ class AIService:
                 "- 「午前中」は08:00〜12:00、「午後」は12:00〜18:00\n"
                 "- 「4/1.2.3」のようなドット区切りは各日付として認識（月/日1.日2.日3の形式）\n"
                 "- 複数日に時刻条件がある場合、各日に同じ時刻を適用\n\n"
+                "必要な時間の長さの解釈:\n"
+                "- 「X時間の打ち合わせ」「X時間の予定」→ required_duration_minutes に X*60 を設定\n"
+                "- 「X分の打ち合わせ」「X分の予定」→ required_duration_minutes に X を設定\n"
+                "- 「1時間打ち合わせできる日」→ required_duration_minutes: 60\n"
+                "- 「2時間空いてる日」→ required_duration_minutes: 120\n"
+                "- 時間の長さが指定されていない場合は required_duration_minutes を省略\n\n"
                 "【必須】出力JSON形式（datesは必ず配列で返す）:\n"
-                '{\n  "task_type": "show_schedule/availability_check/add_event",\n  "dates": [{"date": "YYYY-MM-DD", "time": "HH:MM", "end_time": "HH:MM", "title": "タイトル(add_eventのみ)"}]\n}\n\n'
+                '{\n  "task_type": "show_schedule/availability_check/add_event",\n  "dates": [{"date": "YYYY-MM-DD", "time": "HH:MM", "end_time": "HH:MM", "title": "タイトル(add_eventのみ)"}],\n  "required_duration_minutes": 60 (オプション: 「X時間の打ち合わせ」などで指定された場合のみ)\n}\n\n'
                 "具体例:\n"
                 "・「3/29 7:00~8:00 フランクリン」→ {\"task_type\": \"add_event\", \"dates\": [{\"date\": \"2026-03-29\", \"time\": \"07:00\", \"end_time\": \"08:30\", \"title\": \"フランクリン\"}]}\n"
                 "・「4/8.14.23 6:00~8:30 TSP」→ 3日分のdatesを返す（各日同じ時間とタイトル）\n"
                 "・「明日の空き時間」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-26\", \"time\": \"08:00\", \"end_time\": \"22:00\"}]}\n"
+                "・「3月で1時間打ち合わせできる日」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-03-01\", \"time\": \"08:00\", \"end_time\": \"22:00\"}, {\"date\": \"2026-03-02\", \"time\": \"08:00\", \"end_time\": \"22:00\"}, ... {\"date\": \"2026-03-31\", \"time\": \"08:00\", \"end_time\": \"22:00\"}], \"required_duration_minutes\": 60}\n"
+                "・「来週2時間空いてる日」→ {\"task_type\": \"availability_check\", \"dates\": [来週の7日分], \"required_duration_minutes\": 120}\n"
                 "・「4月1週目の午後の空き時間」→ {\"task_type\": \"availability_check\", \"dates\": [{\"date\": \"2026-04-01\", \"time\": \"12:00\", \"end_time\": \"18:00\"}, {\"date\": \"2026-04-02\", \"time\": \"12:00\", \"end_time\": \"18:00\"}, ... {\"date\": \"2026-04-07\", \"time\": \"12:00\", \"end_time\": \"18:00\"}]}\n"
                 "・「明日の予定教えて」→ {\"task_type\": \"show_schedule\", \"dates\": [{\"date\": \"2026-03-26\"}]}\n"
                 "・「4月1週目の予定」→ {\"task_type\": \"show_schedule\", \"dates\": [{\"date\": \"2026-04-01\"}, {\"date\": \"2026-04-02\"}, ... {\"date\": \"2026-04-07\"}]}\n\n"
@@ -70,12 +78,14 @@ class AIService:
                 "- 日時のみでキーワードなし → availability_check\n"
                 "- 「予定」「スケジュール」などの質問で、空き時間のキーワードがない → show_schedule\n"
                 "- 必ずdatesキー（配列）を使用\n"
-                "- 「移動時間X時間」がある場合は \"travel_time_hours\": X を追加\n\n"
+                "- 「移動時間X時間」がある場合は \"travel_time_hours\": X を追加\n"
+                "- 「X時間の打ち合わせ」「X時間空いてる」などの表現があれば、必ず \"required_duration_minutes\" を追加\n\n"
                 "【最重要】\n"
                 "1. 「空き時間」というキーワードがある場合は、どんな状況でも availability_check を選択してください。\n"
                 "2. 会話履歴（過去のメッセージ）の文脈を必ず考慮してください。前回のやり取りで言及された内容や日時を参照してください。\n"
                 "3. 現在のメッセージと会話履歴を組み合わせて、ユーザーの真の意図を理解してください。\n"
-                "4. 会話履歴に基づいて、省略された情報（日時、タイトルなど）を補完してください。"
+                "4. 会話履歴に基づいて、省略された情報（日時、タイトルなど）を補完してください。\n"
+                "5. 「X時間の打ち合わせ」「X時間空いてる」などの時間要件を必ず抽出して required_duration_minutes に設定してください。"
             )
 
             # メッセージ構築（会話履歴を含める）
