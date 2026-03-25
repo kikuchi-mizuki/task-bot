@@ -1038,48 +1038,59 @@ class AIService:
         ]
         日付ごとに空き時間をまとめて返す（重複枠・重複時間帯は除外）
         """
-        print(f"[DEBUG] format_free_slots_response_by_frame開始")
-        print(f"[DEBUG] 入力データ: {free_slots_by_frame}")
-        
+        logger.info(f"[format_free_slots_response_by_frame] 開始、フレーム数: {len(free_slots_by_frame)}")
+
         jst = pytz.timezone('Asia/Tokyo')
         if not free_slots_by_frame:
-            print(f"[DEBUG] free_slots_by_frameが空")
+            logger.info(f"[format_free_slots_response_by_frame] 空のデータ")
             return "✅空き時間はありませんでした。"
-            
+
         # 日付ごとに空き時間をまとめる
         date_slots = {}
         for i, frame in enumerate(free_slots_by_frame):
-            print(f"[DEBUG] フレーム{i+1}処理: {frame}")
-            date = frame['date']
-            slots = frame['free_slots']
-            print(f"[DEBUG] フレーム{i+1}の空き時間: {slots}")
-            
+            date = frame.get('date')
+            slots = frame.get('free_slots', [])
+
+            if not date:
+                logger.warning(f"[format_free_slots_response_by_frame] フレーム{i+1}: 日付なし")
+                continue
+
             if date not in date_slots:
                 date_slots[date] = set()
+
+            # 空き時間を追加
             for slot in slots:
-                date_slots[date].add((slot['start'], slot['end']))
-                print(f"[DEBUG] 日付{date}に空き時間追加: {slot['start']}〜{slot['end']}")
-                
-        print(f"[DEBUG] 日付ごとの空き時間: {date_slots}")
-        
+                if slot.get('start') and slot.get('end'):
+                    date_slots[date].add((slot['start'], slot['end']))
+
+        logger.info(f"[format_free_slots_response_by_frame] 集計結果: {len(date_slots)}日分")
+
         # 空き時間がない日を除外
         dates_with_slots = {date: slots for date, slots in date_slots.items() if len(slots) > 0}
-        
+
         if not dates_with_slots:
-            print(f"[DEBUG] 空き時間がある日が存在しない")
+            logger.info(f"[format_free_slots_response_by_frame] 空き時間なし")
             return "✅空き時間はありませんでした。"
-        
-        response = "✅以下が空き時間です！\n\n"
+
+        # レスポンスを構築
+        response_lines = ["✅以下が空き時間です！\n"]
+
         for date in sorted(dates_with_slots.keys()):
-            dt = jst.localize(datetime.strptime(date, "%Y-%m-%d"))
-            weekday = "月火水木金土日"[dt.weekday()]
-            response += f"{dt.month}/{dt.day}（{weekday}）\n"
-            
-            slots = sorted(list(dates_with_slots[date]))
-            print(f"[DEBUG] 日付{date}の最終空き時間: {slots}")
-            
-            for start, end in slots:
-                response += f"・{start}〜{end}\n"
-                    
-        print(f"[DEBUG] 最終レスポンス: {response}")
+            try:
+                dt = jst.localize(datetime.strptime(date, "%Y-%m-%d"))
+                weekday = "月火水木金土日"[dt.weekday()]
+                response_lines.append(f"{dt.month}/{dt.day}（{weekday}）")
+
+                # 時刻順にソート
+                slots = sorted(list(dates_with_slots[date]))
+                for start, end in slots:
+                    response_lines.append(f"・{start}〜{end}")
+
+                logger.info(f"[format_free_slots_response_by_frame] {date}: {len(slots)}件の空き時間")
+            except Exception as e:
+                logger.error(f"[format_free_slots_response_by_frame] 日付{date}の処理エラー: {e}")
+
+        response = "\n".join(response_lines)
+        logger.info(f"[format_free_slots_response_by_frame] レスポンス構築完了（{len(response_lines)}行）")
+
         return response 
